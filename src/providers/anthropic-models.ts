@@ -76,6 +76,11 @@ const MODELS: Record<string, ModelSpec> = {
 
 export const WEB_SEARCH_USD_EACH = 10 / 1000;
 
+/** The models above, newest lines first, for /model to offer. */
+export function knownModelIds(): string[] {
+  return Object.keys(MODELS);
+}
+
 export function modelSpec(model: string): ModelSpec | undefined {
   return MODELS[model];
 }

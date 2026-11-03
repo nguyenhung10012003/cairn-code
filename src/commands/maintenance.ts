@@ -2,7 +2,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { backgroundLogDir, fileHistoryDir, sessionsDir, trustFilePath, VERSION } from '../config/paths.ts';
+import { backgroundLogDir, credentialsPath, fileHistoryDir, sessionsDir, trustFilePath, VERSION } from '../config/paths.ts';
+import { DEFAULT_PROVIDER, keySource, PROVIDER_TYPES, providerTypeName } from '../providers/index.ts';
 import { loadSettings } from '../config/settings.ts';
 import { isTrusted } from '../config/trust.ts';
 import { loadMcpConfig } from '../mcp/config.ts';
@@ -27,12 +28,27 @@ export function runDoctor(cwd: string): number {
 
   check('Version', VERSION);
   check('Runtime', `${process.versions.bun ? `Bun ${process.versions.bun}` : `Node ${process.versions.node}`} on ${process.platform}`);
-  const hasKey = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-  check('Anthropic credentials', process.env.ANTHROPIC_API_KEY ? 'ANTHROPIC_API_KEY is set' : process.env.ANTHROPIC_AUTH_TOKEN ? 'ANTHROPIC_AUTH_TOKEN is set' : 'not set', hasKey);
-  if (process.env.ANTHROPIC_BASE_URL) lines.push(`    ANTHROPIC_BASE_URL is set, so requests and your key go to ${sanitize(process.env.ANTHROPIC_BASE_URL)}`);
-
   const trusted = isTrusted(cwd);
   const settings = loadSettings({ cwd, trusted });
+
+  const providerName = settings.provider ?? DEFAULT_PROVIDER;
+  const providerConfig = settings.providers[providerName];
+  const type = providerTypeName(providerName, providerConfig);
+  check('Provider', type ? `${providerName}${type === providerName ? '' : ` (${type})`}` : `${providerName} is not configured`, type !== undefined);
+  if (type) {
+    const source = keySource(providerName, providerConfig);
+    const value =
+      source.kind === 'env' ? `${source.variable} is set`
+      : source.kind === 'stored' ? `saved in ${credentialsPath()}`
+      : source.kind === 'stored-elsewhere' ? `saved for ${sanitize(source.endpoint)} only, which is not where requests now go`
+      : source.optional ? 'none needed' : 'not set';
+    check(providerName === 'anthropic' ? 'Anthropic credentials' : `Credentials for ${providerName}`, value, source.kind === 'env' || source.kind === 'stored' || (source.kind === 'none' && source.optional));
+    const endpoint = PROVIDER_TYPES[type]!.endpoint(providerConfig ?? {});
+    if (providerConfig?.baseUrl || (type === 'anthropic' && process.env.ANTHROPIC_BASE_URL) || (type === 'openai' && process.env.OPENAI_BASE_URL)) {
+      lines.push(`    Requests and the key go to ${sanitize(endpoint)}`);
+    }
+  }
+
   check('This directory', trusted ? 'trusted' : settings.needsTrust ? 'not trusted, and it has settings that wait for trust' : 'not trusted');
   check('Settings', settings.warnings.length === 0 ? 'no problems' : `${settings.warnings.length} problem(s)`, settings.warnings.length === 0);
   for (const warning of settings.warnings) lines.push(`    ${sanitize(warning)}`);

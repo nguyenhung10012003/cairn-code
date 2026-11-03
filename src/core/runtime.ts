@@ -32,7 +32,7 @@ import {
   SESSION_TITLE_SUFFIX,
   SUBAGENT_NOTES,
 } from './prompts.ts';
-import type { Effort, JsonSchema, ModelProvider, SystemBlock } from './provider.ts';
+import type { Effort, JsonSchema, ModelProvider, ProviderConfig, SystemBlock } from './provider.ts';
 import { buildSystemPrompt } from './system-prompt.ts';
 import type { PromptAgent } from './system-prompt.ts';
 import { WakeQueue } from './wakes.ts';
@@ -54,7 +54,8 @@ import type { Sandbox } from '../sandbox/sandbox.ts';
 import { loadSkills, renderSkillListing, skillMatchesPath } from '../skills/skills.ts';
 import type { LoadedSkills, SkillSources } from '../skills/skills.ts';
 import { skillTool } from '../tools/skill.ts';
-import { createProvider, DEFAULT_PROVIDER } from '../providers/index.ts';
+import { allCredentialVars, createProvider, DEFAULT_PROVIDER, ProviderNotConfiguredError } from '../providers/index.ts';
+import { writeDefaultProvider } from '../providers/manage.ts';
 import { CheckpointStore } from '../session/checkpoints.ts';
 import { listSessions, resolveSessionId, restoreHistory, SessionStore } from '../session/store.ts';
 import { createWorktree, finishWorktree, isListedWorktree, removeWorktree, worktreeChanges } from '../session/worktree.ts';
@@ -175,7 +176,21 @@ export interface Runtime {
   agent: Agent;
   engine: PermissionEngine;
   hooks: HookRunner;
-  provider: ModelProvider;
+  /** The provider in use now. /provider can change it. */
+  readonly provider: ModelProvider;
+  /** The name it goes by, such as `anthropic` or one added with `cairn provider add`. */
+  readonly providerName: string;
+  /** Provider settings by name, including ones added during this session. */
+  providerConfigs(): Record<string, ProviderConfig>;
+  /** Adds, replaces or (with null) drops a provider's settings for this session. */
+  configureProvider(name: string, config: ProviderConfig | null): void;
+  /** Sends the rest of the session to another provider. Returns what is worth telling the user. */
+  useProvider(name: string, model?: string): string[];
+  /**
+   * Keeps the current provider and model for new sessions. Returns the file it wrote, or
+   * undefined when the provider was handed in by code rather than chosen by the user.
+   */
+  saveDefaults(): string | undefined;
   mcp: McpManager;
   context: Omit<ToolContext, 'signal'>;
   settings: LoadedSettings;
@@ -377,10 +392,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   });
   // Before the provider is created, since this may set what it reads.
   Object.assign(process.env, settings.env);
-  const providerName = options.providerName ?? settings.provider ?? DEFAULT_PROVIDER;
-  const provider = options.provider ?? createProvider(providerName, settings.providers[providerName]);
-
   const warnings: string[] = [...settings.warnings];
+  const defaultProvider = settings.provider ?? DEFAULT_PROVIDER;
+  let providerName = options.provider ? options.provider.name : (options.providerName ?? defaultProvider);
+  let provider = options.provider ?? createProvider(providerName, settings.providers[providerName], warnings);
+  // The model in settings was chosen for the provider in settings, so it does not carry over to another.
+  const settingsModel = providerName === defaultProvider || options.provider ? settings.model : undefined;
   const pluginLoad = safe
     ? { plugins: [], warnings: [] }
     : loadPlugins({ includeInstalled: !bare && !restricted, enabled: settings.enabledPlugins, ...(options.pluginDirs ? { flagDirs: options.pluginDirs } : {}) });
@@ -400,7 +417,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   if (options.agentName !== undefined && !sessionAgent) {
     throw new Error(`Unknown agent ${options.agentName}. Available: ${agentDefinitions.map((a) => a.name).join(', ')}`);
   }
-  const model = options.model ?? sessionAgent?.model ?? settings.model ?? provider.defaultModel;
+  const model = options.model ?? sessionAgent?.model ?? settingsModel ?? provider.defaultModel;
 
   let cwd = projectDir;
   const additionalDirs = [...settings.additionalDirectories, ...(options.addDirs ?? [])];
@@ -493,6 +510,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   engine.planFile = planPath;
   let modeBeforePlan: PermissionMode = 'default';
   let planReminded = false;
+  const credentialVars = allCredentialVars(settings.providers, provider);
 
   const context: Omit<ToolContext, 'signal'> = {
     cwd: () => cwd,
@@ -507,7 +525,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     tasks,
     autoBackground: !bare,
     extraPath: plugins.flatMap((plugin) => (plugin.binDir ? [plugin.binDir] : [])),
-    secretEnvVars: provider.credentialEnvVars ?? [],
+    // Every provider's, since the session can switch to any of them.
+    secretEnvVars: credentialVars,
     isReadDenied: (path) => engine.isPathDenied('Read', path),
     getMode: () => engine.mode,
     setMode: (mode) => {
@@ -579,7 +598,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     // --safe-mode leaves out even what the command line names; --bare keeps that and no more.
     ...(options.strictMcpConfig || bare ? { strict: true } : {}),
     ...(safe ? { strict: true, configArgs: [] } : {}),
-    ...(provider.credentialEnvVars ? { credentialEnvVars: provider.credentialEnvVars } : {}),
+    credentialEnvVars: credentialVars,
   });
   warnings.push(...mcpConfig.warnings);
   const mcp = new McpManager(mcpConfig.servers, {
@@ -695,8 +714,9 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
    * `opus` and the like name a tier, which each provider maps to one of its models. A tier the
    * provider has no model for keeps the parent's model, as does `inherit`.
    */
-  const aliases = provider.modelAliases ?? {};
-  const resolveName = (name: string): string => aliases[name] ?? (MODEL_TIERS.has(name) ? agent.model : name);
+  // Read on each use: the session can switch providers.
+  const aliasFor = (tier: string): string | undefined => provider.modelAliases?.[tier];
+  const resolveName = (name: string): string => aliasFor(name) ?? (MODEL_TIERS.has(name) ? agent.model : name);
   const resolveModel = (requested: string | undefined, definition: SubagentDefinition): string => {
     if (requested) return resolveName(requested);
     if (definition.model && definition.model !== 'inherit') return resolveName(definition.model);
@@ -857,7 +877,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       let reply = '';
       const stream = provider.stream({
         // The provider's small tier, when it has one: a title is not worth the main model.
-        model: aliases.haiku ?? agent.model,
+        model: aliasFor('haiku') ?? agent.model,
         system: [],
         messages: [userText(prompt)],
         tools: [],
@@ -1043,7 +1063,32 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     agent,
     engine,
     hooks,
-    provider,
+    get provider() {
+      return provider;
+    },
+    get providerName() {
+      return providerName;
+    },
+    providerConfigs: () => settings.providers,
+    configureProvider: (name, config) => {
+      if (config) settings.providers[name] = config;
+      else delete settings.providers[name];
+    },
+    useProvider: (name, model) => {
+      const notes: string[] = [];
+      const next = createProvider(name, settings.providers[name], notes);
+      const chosen = model ?? next.defaultModel;
+      if (!chosen) throw new ProviderNotConfiguredError(`No model is set for "${name}". Choose one with /model after switching, or pass one: /provider ${name} <model>`);
+      const warning = next.configurationWarning?.();
+      if (warning) notes.push(warning);
+      provider = next;
+      providerName = name;
+      agent.switchProvider(next, chosen);
+      // Kept from commands from now on too, if this provider reads a key from a variable of its own.
+      for (const variable of next.credentialEnvVars ?? []) if (!credentialVars.includes(variable)) credentialVars.push(variable);
+      return notes;
+    },
+    saveDefaults: () => (options.provider ? undefined : writeDefaultProvider(providerName, agent.model)),
     mcp,
     context,
     settings,

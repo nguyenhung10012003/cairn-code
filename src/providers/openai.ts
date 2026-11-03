@@ -7,7 +7,7 @@
 import type { Attachment, ContentBlock, Message, StopReason, Usage } from '../core/messages.ts';
 import { emptyUsage } from '../core/messages.ts';
 import { ProviderError } from '../core/provider.ts';
-import type { ModelProvider, ProviderConfig, ProviderRequest, StreamEvent } from '../core/provider.ts';
+import type { ModelProvider, ProviderConfig, ProviderInit, ProviderRequest, StreamEvent } from '../core/provider.ts';
 import { errorMessage, postJson, serverSentEvents } from './http.ts';
 
 const PROVIDER_ID = 'openai';
@@ -228,23 +228,32 @@ function rejectsReasoning(error: ProviderError): boolean {
   return error.status === 400 && /reasoning|summary|encrypted_content/i.test(error.message) && /not supported|unsupported|unrecognized|unknown/i.test(error.message);
 }
 
+/** Where requests go, so a stored key is only sent to the server it was saved for. */
+export function openaiEndpoint(config: ProviderConfig): string {
+  return (config.baseUrl ?? process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+}
+
 export class OpenAIProvider implements ModelProvider {
-  readonly name = PROVIDER_ID;
-  readonly defaultModel = DEFAULT_MODEL;
+  readonly name: string;
+  readonly defaultModel: string;
   readonly credentialEnvVars: string[];
   readonly serverTools = [];
   readonly modelAliases: Record<string, string> = { opus: 'gpt-6-astra', fable: 'gpt-6-astra', sonnet: 'gpt-6.1-sol', haiku: 'gpt-6-luna' };
 
   private readonly baseUrl: string;
   private readonly keyVar: string;
+  private readonly storedKey: string | undefined;
   private readonly maxRetries: number;
   private readonly configuredWindow: number | undefined;
   /** Models that rejected the reasoning parameter once are not sent it again. */
   private readonly withoutReasoning = new Set<string>();
 
-  constructor(config: ProviderConfig = {}) {
-    this.baseUrl = (config.baseUrl ?? process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+  constructor(config: ProviderInit = {}) {
+    this.name = config.name ?? PROVIDER_ID;
+    this.defaultModel = config.model ?? DEFAULT_MODEL;
+    this.baseUrl = openaiEndpoint(config);
     this.keyVar = config.apiKeyEnv ?? 'OPENAI_API_KEY';
+    this.storedKey = config.storedKey;
     this.credentialEnvVars = ['OPENAI_API_KEY', ...(config.apiKeyEnv ? [config.apiKeyEnv] : [])];
     this.maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.configuredWindow = config.contextWindow;
@@ -254,13 +263,21 @@ export class OpenAIProvider implements ModelProvider {
     return MODELS[model]?.contextWindow ?? this.configuredWindow ?? DEFAULT_CONTEXT_WINDOW;
   }
 
+  private key(): string | undefined {
+    return process.env[this.keyVar] || this.storedKey;
+  }
+
   configurationWarning(): string | undefined {
-    return process.env[this.keyVar] ? undefined : `${this.keyVar} is not set, so requests to OpenAI will fail.`;
+    return this.key() ? undefined : `${this.keyVar} is not set, so requests to OpenAI will fail. Save a key with: cairn provider key ${this.name}`;
+  }
+
+  async listModels(): Promise<string[]> {
+    return Object.keys(MODELS);
   }
 
   private headers(): Record<string, string> {
-    const key = process.env[this.keyVar];
-    if (!key) throw new ProviderError(`No OpenAI API key found. Set ${this.keyVar}.`);
+    const key = this.key();
+    if (!key) throw new ProviderError(`No OpenAI API key found. Set ${this.keyVar}, or save one with \`cairn provider key ${this.name}\`.`);
     return {
       authorization: `Bearer ${key}`,
       ...(process.env.OPENAI_ORG_ID ? { 'openai-organization': process.env.OPENAI_ORG_ID } : {}),

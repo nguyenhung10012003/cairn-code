@@ -6,6 +6,7 @@ import { APP_DISPLAY_NAME, VERSION } from '../config/paths.ts';
 import { commandEntries, runSlashCommand, settleCommand } from '../commands/slash.ts';
 import type { CommandEntry, CommandIO, CommandResult } from '../commands/slash.ts';
 import { CommandMenu } from './command-menu.ts';
+import { pickFromList, readSecret } from './picker.ts';
 import type { SkillActivation } from '../skills/skills.ts';
 import type { AgentEvent } from '../core/agent.ts';
 import type { Runtime } from '../core/runtime.ts';
@@ -259,7 +260,7 @@ export async function runRepl(
     runtime.engine.mode = modes[(index + 1) % modes.length]!;
   };
 
-  stdout.write(`${style.bold(APP_DISPLAY_NAME)} ${style.dim(`v${VERSION}  ${runtime.provider.name} / ${runtime.agent.model}`)}\n`);
+  stdout.write(`${style.bold(APP_DISPLAY_NAME)} ${style.dim(`v${VERSION}  ${runtime.providerName} / ${runtime.agent.model}`)}\n`);
   stdout.write(`${style.dim(`${runtime.projectDir}  -  /help for commands`)}\n`);
   for (const warning of runtime.warnings) stdout.write(`${style.yellow('! ')}${sanitize(warning)}\n`);
   if (runtime.engine.mode === 'bypassPermissions') {
@@ -302,12 +303,11 @@ export async function runRepl(
 
   const io: CommandIO = {
     choose: async (title, options) => {
-      stdout.write(`${title}\n`);
-      options.forEach((option, i) => stdout.write(`  ${i + 1}. ${sanitize(option)}\n`));
-      const raw = (await input.read('Number (Enter to cancel): '))?.trim() ?? '';
-      const index = Number.parseInt(raw, 10) - 1;
-      return Number.isInteger(index) && index >= 0 && index < options.length ? index : null;
+      const value = await pickFromList(title, options.map((label, i) => ({ value: String(i), label })));
+      return value === null ? null : Number(value);
     },
+    pick: (title, items, options) => pickFromList(title, items, options),
+    ask: (question, options) => (options?.secret ? readSecret(question) : input.read(question)),
   };
 
   // Background work finishing, and scheduled prompts coming due, drive turns without the user typing.

@@ -77,10 +77,16 @@ export interface ModelProvider {
   contextWindow(model: string): number;
   /** A problem worth showing at startup, such as missing credentials. */
   configurationWarning?(): string | undefined;
+  /** Models to offer in /model: ones the provider knows, or ones the server reports. */
+  listModels?(signal?: AbortSignal): Promise<string[]>;
 }
 
 /** User-editable settings for one provider, under `providers.<name>` in settings.json. */
 export interface ProviderConfig {
+  /** Which API it speaks, for a provider added under a name of its own. Defaults to the name. */
+  type?: string;
+  /** The model to use with this provider when none is chosen. */
+  model?: string;
   baseUrl?: string;
   /** Read the key from this variable instead of the provider's standard one. */
   apiKeyEnv?: string;
@@ -89,6 +95,16 @@ export interface ProviderConfig {
   maxRetries?: number;
   /** Tokens of context, for models the provider does not know. Ollama also loads the model with this many. */
   contextWindow?: number;
+  /** openai-chat: the most tokens to ask for in a response. Unset leaves it to the server. */
+  maxOutputTokens?: number;
+}
+
+/** What a provider is built from: its settings, plus what Cairn adds when it creates one. */
+export interface ProviderInit extends ProviderConfig {
+  /** The name it was configured under, shown to the user. Defaults to its type. */
+  name?: string;
+  /** A key saved with `cairn provider key`. A key in the environment takes precedence. */
+  storedKey?: string;
 }
 
 export class ProviderError extends Error {

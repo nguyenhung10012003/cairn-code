@@ -136,6 +136,10 @@ export class ScriptedProvider implements ModelProvider {
     return this.warning;
   }
 
+  async listModels(): Promise<string[]> {
+    return [this.defaultModel];
+  }
+
   async *stream(request: ProviderRequest): AsyncGenerator<StreamEvent> {
     const { signal, ...rest } = request;
     this.requests.push(structuredClone(rest));

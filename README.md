@@ -16,7 +16,7 @@ To try it without installing, run `npx cairn-code`.
 
 **In repositories you do not trust, run the installed `cairn` rather than `npx cairn-code`.** npx prefers a copy of the package from the current project's `node_modules`, so the repository could supply its own.
 
-Create a key in the Anthropic Console. Cairn uses an API key or `ANTHROPIC_AUTH_TOKEN`. It does not reuse a Claude Code login or subscription. For OpenAI or a local model, see Providers.
+Create a key in the Anthropic Console. Cairn uses an API key or `ANTHROPIC_AUTH_TOKEN`, from the environment or saved with `cairn provider key anthropic`. It does not reuse a Claude Code login or subscription. For OpenAI, DeepSeek, Groq, OpenRouter or a local model, see Providers.
 
 ### From source
 
@@ -70,28 +70,65 @@ In an interactive session: `Esc` or `Ctrl+C` interrupts the running turn, `Shift
 
 ## Providers
 
-The default is `anthropic` with the model `claude-opus-5-5`. Change it with `--provider`, `--model`, or settings:
+The built-in providers are `anthropic` (the default, with `claude-opus-5-5`), `openai`, `ollama` and `scripted` (mock replies). You can add more under names of your own, and switch between them during a session.
+
+**In a session:** `/provider` opens a list of providers. Type to narrow it, use ↑↓ and Enter to choose, or pick "Add a provider…". If the chosen provider has no key, Cairn asks for one and saves it. `/model` lists the current provider's models; the list comes from the server for `ollama` and `openai-chat`. You can also type a model name that is not in the list. `/provider <name> [model]` and `/model <name>` switch directly. The conversation continues on the new provider, and new sessions start with your last choice. `/provider key <name>` saves or replaces a key, and `/provider remove <name>` removes a provider.
+
+**From a shell:**
+
+```sh
+cairn provider add deepseek --type openai-chat --base-url https://api.deepseek.com/v1 --model deepseek-chat
+                                    # asks for the key without showing it, and saves it
+cairn provider list                 # every provider, its model, and where its key comes from
+cairn provider key openai           # save or replace a key; --stdin to pipe it in, --delete to remove it
+cairn provider use deepseek         # the default for new sessions
+cairn --provider deepseek           # or just for this run
+cairn provider remove deepseek      # removes its settings and its saved key
+```
+
+Without `--type`, `add` asks for the type, then for the base URL, the key and the model.
+
+**Keys** are saved in `~/.cairn/credentials.json`, which only you can read (mode 0600). They never go in a settings file. A variable takes precedence over a saved key: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OLLAMA_API_KEY`, or the one named by `apiKeyEnv`. Each key is saved together with the address it was entered for, and is only sent there. If the provider's `baseUrl` changes, through your settings, a project's settings or a variable such as `OPENAI_BASE_URL`, Cairn warns and sends no key until you save one for the new address. This stops a repository from redirecting a provider name to its own server to collect your key. Before saving a key for a plain `http://` address on another machine, Cairn warns that the key would cross the network unencrypted.
+
+**Settings:** a provider added with `cairn provider add` or `/provider add` is written to `~/.cairn/settings.json`, or with `-s project` or `-s local` to this project's files:
 
 ```json
 {
-  "provider": "anthropic",
-  "model": "claude-opus-5-5",
+  "provider": "deepseek",
+  "model": "deepseek-chat",
   "providers": {
-    "anthropic": {
-      "baseUrl": "https://gateway.example.com",
-      "apiKeyEnv": "MY_GATEWAY_KEY"
-    }
+    "deepseek": { "type": "openai-chat", "baseUrl": "https://api.deepseek.com/v1", "model": "deepseek-chat" },
+    "anthropic": { "baseUrl": "https://gateway.example.com", "apiKeyEnv": "MY_GATEWAY_KEY" }
   }
 }
 ```
 
+`model` at the top level goes with `provider` at the top level. With `--provider` set to another provider, that provider's own `model`, or its built-in default, is used instead.
+
 | Option | Meaning |
 | --- | --- |
-| `baseUrl` | An Anthropic-compatible endpoint. `ANTHROPIC_BASE_URL` does the same |
-| `apiKeyEnv` | Read the key from this variable instead of `ANTHROPIC_API_KEY` |
-| `fullApiFeatures` | Use the API extras even through a `baseUrl`. Set this only if the upstream really is the API |
+| `type` | The API a provider added under its own name speaks: `anthropic`, `openai`, `openai-chat` or `ollama`. The built-in names always speak their own |
+| `model` | The model to use with this provider |
+| `baseUrl` | Where its API is. For `anthropic`, `ANTHROPIC_BASE_URL` does the same |
+| `apiKeyEnv` | Read the key from this variable |
+| `fullApiFeatures` | `anthropic`: use the API extras even through a `baseUrl`. Set this only if the upstream really is the API |
 | `maxRetries` | Retries on 429, 5xx and connection errors. Default 4 (Ollama: 1) |
 | `contextWindow` | Tokens of context. Ollama loads the model with exactly this many; for other providers it sets when to compact for a model they do not know |
+| `maxOutputTokens` | `openai-chat`: the most tokens to ask for in a response. Unset, the server decides |
+
+### Chat Completions (`openai-chat`)
+
+For any server that speaks OpenAI's Chat Completions API, such as DeepSeek, Groq, OpenRouter, Together, Mistral, LM Studio, vLLM or llama.cpp:
+
+```sh
+cairn provider add groq --type openai-chat --base-url https://api.groq.com/openai/v1
+cairn provider add lmstudio --type openai-chat --base-url http://localhost:1234/v1 --no-key
+```
+
+- **Parameters a server rejects** (`parallel_tool_calls`, `reasoning_effort`, `stream_options`, `response_format`, or `max_tokens` where it wants `max_completion_tokens`) are dropped for that model, and the request is sent again.
+- **Reasoning** that a server streams (`reasoning_content` or `reasoning`) is shown as thinking. It is not sent back in the history, because few servers accept it there.
+- **Images** from a tool go in a following user message. PDFs cannot be sent.
+- **Not yet supported:** prices, so `/cost` shows tokens only, and web search.
 
 ### OpenAI
 
@@ -126,7 +163,7 @@ Cairn uses Ollama's native `/api/chat` API, not its OpenAI-compatible endpoint, 
 
 The Agent tool's `model` parameter takes `opus`, `sonnet`, `haiku` or `fable`. Each provider maps these its own way: on Anthropic, the newest Claude model of each line; on OpenAI, `gpt-6-astra` (`opus`, `fable`), `gpt-6.1-sol` (`sonnet`) and `gpt-6-luna` (`haiku`). A provider with no mapping, such as Ollama, uses the main session's model. Automatic session titles use the provider's `haiku` model when it has one.
 
-**Adding a provider:** write a class implementing `ModelProvider` in `src/providers/`, translating between that API's format and the neutral types in `src/core/messages.ts`, and add one line to `FACTORIES` in `src/providers/index.ts`. `src/providers/http.ts` has retries and readers for SSE and NDJSON. The agent loop, tools and UI need no changes.
+**Supporting another API:** a server that speaks one of the four APIs above needs only `cairn provider add`. For a different API, write a class implementing `ModelProvider` in `src/providers/`, translating between that API's format and the neutral types in `src/core/messages.ts`. Then add an entry to `PROVIDER_TYPES` in `src/providers/index.ts` that says how to create it, where its requests go, and which variables hold its key. `src/providers/http.ts` has retries and readers for SSE and NDJSON. The agent loop, tools, UI and `cairn provider` need no changes.
 
 ### API features in use (Anthropic)
 
@@ -142,7 +179,7 @@ Through a custom `baseUrl`, Cairn sends only what any gateway should accept: web
 
 **About web search:** it runs on the server, so Cairn cannot ask you before each search. Malicious content in a file could lead the model to put data into a search query. When working with sensitive data, turn it off with the rule `"deny": ["WebSearch"]`.
 
-**About keys:** Cairn removes the active provider's key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `OLLAMA_API_KEY`) and related credential variables from the environment of the commands the model runs, so `env` cannot leak the key into the transcript. A program in the repository that needs that key will not see it when run through Cairn. Hooks you configure still see it.
+**About keys:** Cairn removes every provider's key variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OLLAMA_API_KEY`, each `apiKeyEnv` and related credential variables) from the environment of the commands the model runs, so `env` cannot leak a key into the transcript. It removes them all, not just the active provider's, because the session can switch providers. A program in the repository that needs one of those keys will not see it when run through Cairn. Hooks you configure still see them. Saved keys are never put in any environment.
 
 ## MCP
 
@@ -426,7 +463,7 @@ Every endpoint must validate its input.
 ```
 src/cli.ts            Entry point and argument parsing
 src/core/             Agent loop, session wiring, system prompt, compaction
-src/providers/        Model API connections
+src/providers/        Model API connections, and `cairn provider`
 src/mcp/              Configuration, connections, OAuth and `cairn mcp`
 src/skills/           Reading and filling in skills
 src/plugins/          Reading, installing and managing plugins

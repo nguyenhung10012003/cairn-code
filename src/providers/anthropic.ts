@@ -5,8 +5,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ContentBlock, Message, StopReason, Usage } from '../core/messages.ts';
 import { ProviderError } from '../core/provider.ts';
-import type { ModelProvider, ProviderConfig, ProviderRequest, ServerTool, StreamEvent } from '../core/provider.ts';
-import { estimateCostUsd, modelSpec } from './anthropic-models.ts';
+import type { ModelProvider, ProviderConfig, ProviderInit, ProviderRequest, ServerTool, StreamEvent } from '../core/provider.ts';
+import { estimateCostUsd, knownModelIds, modelSpec } from './anthropic-models.ts';
 import type { AttemptUsage } from './anthropic-models.ts';
 
 const PROVIDER_ID = 'anthropic';
@@ -302,9 +302,14 @@ function isBadToolJson(error: unknown): boolean {
   );
 }
 
+/** Where requests go, so a stored key is only sent to the server it was saved for. */
+export function anthropicEndpoint(config: ProviderConfig): string {
+  return (config.baseUrl ?? process.env.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com').replace(/\/+$/, '');
+}
+
 export class AnthropicProvider implements ModelProvider {
-  readonly name = PROVIDER_ID;
-  readonly defaultModel = DEFAULT_MODEL;
+  readonly name: string;
+  readonly defaultModel: string;
   readonly credentialEnvVars: string[];
   readonly serverTools: ServerTool[];
   readonly modelAliases: Record<string, string> = {
@@ -317,15 +322,24 @@ export class AnthropicProvider implements ModelProvider {
   private readonly client: Anthropic;
   private readonly fullApiFeatures: boolean;
   private readonly credentialHint: string;
+  private readonly hasStoredKey: boolean;
+  private readonly configuredWindow: number | undefined;
 
-  constructor(config: ProviderConfig = {}) {
+  constructor(config: ProviderInit = {}) {
+    this.name = config.name ?? PROVIDER_ID;
+    this.defaultModel = config.model ?? DEFAULT_MODEL;
     const baseUrl = config.baseUrl ?? process.env.ANTHROPIC_BASE_URL;
     // The extras are only known to work on the real API; a proxy may reject them.
     this.fullApiFeatures = config.fullApiFeatures ?? !baseUrl;
     this.serverTools = this.fullApiFeatures ? ['web_search'] : [];
     this.credentialEnvVars = [...STANDARD_CREDENTIAL_VARS, ...(config.apiKeyEnv ? [config.apiKeyEnv] : [])];
     this.credentialHint = config.apiKeyEnv ?? 'ANTHROPIC_API_KEY';
-    const key = config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined;
+    this.configuredWindow = config.contextWindow;
+    const envKey = config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined;
+    // With no variable named, the SDK reads the standard ones itself, and they come first.
+    const standardKeySet = !config.apiKeyEnv && Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+    const key = envKey || (standardKeySet ? undefined : config.storedKey);
+    this.hasStoredKey = Boolean(config.storedKey);
     this.client = new Anthropic({
       maxRetries: config.maxRetries ?? DEFAULT_MAX_RETRIES,
       ...(config.baseUrl ? { baseURL: config.baseUrl } : {}),
@@ -334,13 +348,17 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   contextWindow(model: string): number {
-    return modelSpec(model)?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+    return modelSpec(model)?.contextWindow ?? this.configuredWindow ?? DEFAULT_CONTEXT_WINDOW;
   }
 
   configurationWarning(): string | undefined {
     const names = this.credentialHint === 'ANTHROPIC_API_KEY' ? ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] : [this.credentialHint];
-    if (names.some((name) => process.env[name])) return undefined;
-    return `${this.credentialHint} is not set, so requests will fail unless an \`ant auth login\` profile exists.`;
+    if (this.hasStoredKey || names.some((name) => process.env[name])) return undefined;
+    return `${this.credentialHint} is not set, so requests will fail unless an \`ant auth login\` profile exists. Save a key with: cairn provider key ${this.name}`;
+  }
+
+  async listModels(): Promise<string[]> {
+    return knownModelIds();
   }
 
   async *stream(request: ProviderRequest): AsyncGenerator<StreamEvent> {

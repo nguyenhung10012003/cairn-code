@@ -13,6 +13,7 @@ import type { Effort, JsonSchema } from './core/provider.ts';
 import { createRuntime } from './core/runtime.ts';
 import type { Runtime, RuntimeOptions } from './core/runtime.ts';
 import { runMcpCommand } from './mcp/cli.ts';
+import { runProviderCommand } from './providers/cli.ts';
 import { runPluginCommand } from './plugins/plugins.ts';
 import { PERMISSION_MODES } from './permissions/engine.ts';
 import type { PermissionMode } from './permissions/engine.ts';
@@ -40,8 +41,8 @@ Options:
       --no-session-persistence      Do not save this session to disk
       --model <name>                Model for this session
       --effort <level>              low, medium, high, xhigh or max
-      --provider <name>             Which model API to use: anthropic (default), openai, ollama,
-                                    or scripted for mock replies without an API (type "help")
+      --provider <name>             anthropic (default), openai, ollama, one added with
+                                    \`${APP_NAME} provider add\`, or scripted for mock replies (type "help")
       --permission-mode <mode>      ${PERMISSION_MODES.join(', ')}
       --dangerously-skip-permissions  Same as --permission-mode bypassPermissions
       --allow-dangerously-skip-permissions
@@ -85,6 +86,7 @@ Options:
   -h, --help                        Show this help
 
 Commands:
+  provider                          Add providers, save their keys, choose the default
   mcp                               Add, list and sign in to MCP servers
   plugin                            Validate, install and manage plugins
   doctor                            Check this installation
@@ -160,6 +162,7 @@ function readPipedInput(firstChunkTimeoutMs?: number): Promise<string> {
 async function main(): Promise<number> {
   const subcommand = process.argv[2];
   if (subcommand === 'mcp') return runMcpCommand(process.argv.slice(3));
+  if (subcommand === 'provider' || subcommand === 'providers') return runProviderCommand(process.argv.slice(3));
   if (subcommand === 'plugin' || subcommand === 'plugins') return runPluginCommand(process.argv.slice(3));
   if (subcommand === 'doctor') return runDoctor(realpathSync(process.cwd()));
   if (subcommand === 'purge') return runPurge(process.argv.slice(3), realpathSync(process.cwd()));

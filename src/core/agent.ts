@@ -122,6 +122,22 @@ export class Agent {
     return this.system;
   }
 
+  get provider(): ModelProvider {
+    return this.options.provider;
+  }
+
+  /**
+   * Sends the rest of the conversation to another provider and model. The history is neutral,
+   * so it carries over; blocks only the old provider understands stay in it but are not sent.
+   */
+  switchProvider(provider: ModelProvider, model: string): void {
+    this.options.provider = provider;
+    this.model = model;
+    this.lastServedBy = undefined;
+    // lastContextTokens stays: the history is as long as it was, and a model with a smaller
+    // window should compact it before the first request rather than fail on it.
+  }
+
   get sessionId(): string {
     return this.store.id;
   }

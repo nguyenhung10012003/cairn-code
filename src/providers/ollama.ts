@@ -10,7 +10,7 @@ import { APP_DISPLAY_NAME } from '../config/paths.ts';
 import type { ContentBlock, Message, StopReason, Usage } from '../core/messages.ts';
 import { emptyUsage } from '../core/messages.ts';
 import { ProviderError } from '../core/provider.ts';
-import type { Effort, ModelProvider, ProviderConfig, ProviderRequest, StreamEvent } from '../core/provider.ts';
+import type { Effort, ModelProvider, ProviderInit, ProviderRequest, StreamEvent } from '../core/provider.ts';
 import { errorMessage, jsonLines, postJson } from './http.ts';
 
 const PROVIDER_ID = 'ollama';
@@ -126,21 +126,25 @@ function rejectsThink(error: ProviderError): boolean {
 }
 
 export class OllamaProvider implements ModelProvider {
-  readonly name = PROVIDER_ID;
-  readonly defaultModel = DEFAULT_MODEL;
+  readonly name: string;
+  readonly defaultModel: string;
   readonly credentialEnvVars: string[];
   readonly serverTools = [];
 
   private readonly host: string;
   private readonly keyVar: string;
+  private readonly storedKey: string | undefined;
   private readonly maxRetries: number;
   private readonly window: number;
   /** Per model, the `think` value that worked after a rejection, so it is not tried again. */
   private readonly thinkFallback = new Map<string, string | boolean | undefined>();
 
-  constructor(config: ProviderConfig = {}) {
+  constructor(config: ProviderInit = {}) {
+    this.name = config.name ?? PROVIDER_ID;
+    this.defaultModel = config.model ?? DEFAULT_MODEL;
     this.host = ollamaHost(config.baseUrl ?? process.env.OLLAMA_HOST);
     this.keyVar = config.apiKeyEnv ?? 'OLLAMA_API_KEY';
+    this.storedKey = config.storedKey;
     this.credentialEnvVars = ['OLLAMA_API_KEY', ...(config.apiKeyEnv ? [config.apiKeyEnv] : [])];
     this.maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.window = config.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
@@ -148,6 +152,15 @@ export class OllamaProvider implements ModelProvider {
 
   contextWindow(): number {
     return this.window;
+  }
+
+  /** The models this Ollama server has downloaded. */
+  async listModels(signal?: AbortSignal): Promise<string[]> {
+    const key = process.env[this.keyVar] || this.storedKey;
+    const response = await fetch(`${this.host}/api/tags`, { headers: key ? { authorization: `Bearer ${key}` } : {}, ...(signal ? { signal } : {}) });
+    if (!response.ok) throw new ProviderError(`Ollama at ${this.host} did not list its models (HTTP ${response.status}).`);
+    const body = (await response.json()) as { models?: { name?: unknown }[] };
+    return (body.models ?? []).flatMap((model) => (typeof model.name === 'string' ? [model.name] : [])).sort();
   }
 
   /** A local model costs nothing per token. A remote host may charge, at a rate Cairn does not know. */
@@ -181,7 +194,7 @@ export class OllamaProvider implements ModelProvider {
   }
 
   async *stream(request: ProviderRequest): AsyncGenerator<StreamEvent> {
-    const key = process.env[this.keyVar];
+    const key = process.env[this.keyVar] || this.storedKey;
     const candidates = this.thinkCandidates(request.model, request.effort);
     let response: Response | undefined;
     for (const [index, think] of candidates.entries()) {

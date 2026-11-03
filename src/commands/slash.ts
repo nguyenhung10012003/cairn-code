@@ -15,6 +15,7 @@ import { listSessions } from '../session/store.ts';
 import { splitArguments } from '../skills/skills.ts';
 import type { Skill, SkillActivation } from '../skills/skills.ts';
 import { prepareSkill, SkillError } from '../tools/skill.ts';
+import { modelCommand, providerCommand } from './provider.ts';
 
 export interface CommandResult {
   /** Text to print. */
@@ -30,9 +31,22 @@ export interface CommandResult {
   run?: (signal: AbortSignal) => Promise<CommandResult>;
 }
 
+export interface PickItem {
+  value: string;
+  label: string;
+  detail?: string;
+}
+
 export interface CommandIO {
   /** Asks the user to pick from a list. Returns the chosen index, or null. */
   choose(title: string, options: string[]): Promise<number | null>;
+  /**
+   * A list the user narrows by typing. Returns the chosen value, or null. With `allowCustom`,
+   * what was typed can be returned too. Absent where nobody is there to choose.
+   */
+  pick?(title: string, items: PickItem[], options?: { initial?: string; allowCustom?: boolean }): Promise<string | null>;
+  /** One line of text, or null. With `secret`, what is typed is not shown. Absent where nobody is there to answer. */
+  ask?(question: string, options?: { secret?: boolean }): Promise<string | null>;
 }
 
 interface BuiltinCommand {
@@ -150,11 +164,12 @@ const BUILTINS: Record<string, BuiltinCommand> = {
     },
   },
   model: {
-    description: 'Show or change the model',
-    run: (args, runtime) => {
-      if (args) runtime.agent.model = args;
-      return { output: `Model: ${runtime.agent.model}` };
-    },
+    description: 'Choose the model, from a list or by name. Kept for new sessions',
+    run: (args, runtime, io) => modelCommand(args, runtime, io),
+  },
+  provider: {
+    description: 'Switch provider, or: /provider add, /provider key <name>, /provider remove <name>, /provider list',
+    run: (args, runtime, io) => providerCommand(args, runtime, io),
   },
   effort: {
     description: 'Show or change the effort level: low, medium, high, xhigh, max',
@@ -237,7 +252,7 @@ const BUILTINS: Record<string, BuiltinCommand> = {
     run: (_args, runtime) => ({
       output: [
         `${APP_DISPLAY_NAME} session ${runtime.agent.sessionId}`,
-        `Provider: ${runtime.provider.name}`,
+        `Provider: ${runtime.providerName}`,
         `Model: ${runtime.agent.model}`,
         `Permission mode: ${runtime.engine.mode}`,
         `Directory: ${runtime.context.cwd()}${runtime.trusted ? ' (trusted)' : ''}`,

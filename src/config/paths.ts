@@ -31,6 +31,10 @@ export function trustFilePath(): string {
   return join(appHome(), 'trust.json');
 }
 
+export function credentialsPath(): string {
+  return join(appHome(), 'credentials.json');
+}
+
 export function sessionsDir(cwd: string): string {
   return join(appHome(), 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
 }

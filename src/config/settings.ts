@@ -244,6 +244,32 @@ export function loadSettings(options: LoadOptions): LoadedSettings {
   return result;
 }
 
+export type SettingsScope = 'user' | 'project' | 'local';
+
+export function settingsPathFor(scope: SettingsScope, cwd: string): string {
+  if (scope === 'user') return userSettingsPath();
+  return scope === 'project' ? projectSettingsPath(cwd) : localSettingsPath(cwd);
+}
+
+/**
+ * Changes one settings file and keeps everything else in it. A file that is not valid JSON is
+ * left alone, rather than replaced by one that has lost its other settings.
+ */
+export function updateSettingsFile(path: string, change: (settings: Record<string, unknown>) => void): void {
+  let current: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) current = parsed as Record<string, unknown>;
+    } catch (error) {
+      throw new Error(`${path} is not valid JSON (${(error as Error).message}), so it was not changed. Fix it first.`);
+    }
+  }
+  change(current);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
+}
+
 /** Saves an approval the user chose to keep. The local file is never meant to be committed. */
 export function appendLocalAllowRule(cwd: string, rule: string): void {
   const path = localSettingsPath(cwd);
