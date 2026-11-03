@@ -1,7 +1,15 @@
 {
   "name": "cairn-code",
   "version": "0.1.0",
-  "description": "A terminal coding agent: agent loop, tools, permissions, hooks, sessions and checkpoints.",
+  "description": "A coding agent for the terminal: tools, permissions, sandbox, MCP, skills and plugins, on Anthropic, OpenAI, Ollama or any Chat Completions API.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nguyenhung10012003/cairn-code.git"
+  },
+  "homepage": "https://github.com/nguyenhung10012003/cairn-code#readme",
+  "bugs": {
+    "url": "https://github.com/nguyenhung10012003/cairn-code/issues"
+  },
   "keywords": [
     "cli",
     "coding-agent",
@@ -10,7 +18,9 @@
     "anthropic",
     "openai",
     "ollama",
-    "mcp"
+    "mcp",
+    "terminal",
+    "agent"
   ],
   "type": "module",
   "bin": {

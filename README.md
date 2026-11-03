@@ -1,6 +1,18 @@
 # Cairn
 
-A coding agent for the terminal: agent loop, tools, permission system, hooks, sessions and checkpoints. Its behavior follows Claude Code's public documentation. Its system prompt and tool descriptions are adapted from Claude Code's published system prompts, with product names, paths and features changed to Cairn's.
+[![CI](https://github.com/nguyenhung10012003/cairn-code/actions/workflows/ci.yml/badge.svg)](https://github.com/nguyenhung10012003/cairn-code/actions/workflows/ci.yml)
+
+A coding agent for the terminal. It reads and edits code, runs commands and works through tasks with you, and asks before doing anything you have not allowed.
+
+- **Models:** Anthropic (the default), OpenAI, Ollama, and any server that speaks Chat Completions, such as DeepSeek, Groq, OpenRouter, LM Studio or vLLM. `/provider` and `/model` switch during a session. Keys are saved per provider, and each key is only sent to the address it was saved for.
+- **Tools:** reading, writing and editing files, search, shell commands that can run in the background, web fetch and search, notebooks, images and PDFs, a task checklist, plan mode, git worktrees, scheduled prompts, and subagents that work in the background.
+- **Safety:** permission rules and modes, approval prompts answered with the arrow keys (with an optional note for the model), an operating-system sandbox (Seatbelt on macOS, bubblewrap on Linux) with a network proxy, and workspace trust for project settings.
+- **Extending:** MCP servers (stdio, HTTP, SSE, with OAuth sign-in), skills, custom commands and agents, hooks, and plugins.
+- **Sessions:** saved transcripts to resume, fork and rename, file checkpoints undone with `/rewind`, automatic compaction, and memory across sessions.
+- **Interactive terminal:** you can type while the agent works. A message waits 3 seconds so you can add to it, `/queue` runs messages in turn, a status line shows what is running, and typing `/` opens a command menu that filters as you type.
+- **Scripting:** `-p` print mode with text, JSON or stream-JSON output, answers that follow a JSON Schema, and a mock provider for trying everything without an API key.
+
+Its behavior follows Claude Code's public documentation. Its system prompt and tool descriptions are adapted from Claude Code's published system prompts, with product names, paths and features changed to Cairn's.
 
 ## Install
 
