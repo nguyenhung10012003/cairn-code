@@ -6,13 +6,14 @@ import { APP_DISPLAY_NAME, VERSION } from '../config/paths.ts';
 import { commandEntries, runSlashCommand, settleCommand } from '../commands/slash.ts';
 import type { CommandEntry, CommandIO, CommandResult } from '../commands/slash.ts';
 import { CommandMenu } from './command-menu.ts';
-import { pickFromList, readSecret } from './picker.ts';
+import { chooseWithNote, pickFromList, readSecret } from './picker.ts';
+import type { ChoiceOption } from './picker.ts';
 import type { SkillActivation } from '../skills/skills.ts';
 import type { AgentEvent } from '../core/agent.ts';
 import type { Runtime } from '../core/runtime.ts';
 import type { PermissionMode } from '../permissions/engine.ts';
 import type { PermissionAnswer, PermissionPrompt, Prompter, UserQuestion } from '../tools/types.ts';
-import { MarkdownStream, permissionPreview, sanitize, Spinner, style, toolResultSummary, toolSummary } from './render.ts';
+import { displayWidth, MarkdownStream, permissionPreview, sanitize, Spinner, style, toolResultSummary, toolSummary } from './render.ts';
 
 const stdin = process.stdin;
 const stdout = process.stdout;
@@ -119,11 +120,35 @@ class TerminalPrompter implements Prompter {
     for (const line of permissionPreview(prompt.toolName, prompt.input)) stdout.write(`${line}\n`);
     stdout.write(`${style.dim(sanitize(prompt.reason))}\n`);
     const canAlways = !prompt.forced && prompt.suggestions.length > 0;
-    if (canAlways) {
+    const rules = prompt.suggestions.map((suggestion) => suggestion.rule).join(', ');
+    const where = prompt.suggestions.some((suggestion) => suggestion.persist) ? 'saved for this project' : 'for this session';
+    const alwaysLabel = `Yes, and don't ask again for ${rules} (${where})`;
+    // A rule too long for the option line is shown in full above it.
+    if (canAlways && displayWidth(alwaysLabel) > (stdout.columns || 80) - 6) {
       for (const suggestion of prompt.suggestions) {
-        stdout.write(style.dim(`  always would add: ${sanitize(suggestion.rule)} (${suggestion.persist ? 'saved for this project' : 'this session'})\n`));
+        stdout.write(style.dim(`  don't ask again would add: ${sanitize(suggestion.rule)} (${suggestion.persist ? 'saved for this project' : 'this session'})\n`));
       }
     }
+
+    if (!stdin.isTTY || !stdout.isTTY) return this.typedPermission(canAlways);
+    const options: { option: ChoiceOption; answer: PermissionAnswer }[] = [
+      { option: { label: 'Yes', key: 'y', notePrompt: 'Yes, and tell the model' }, answer: { behavior: 'allow' } },
+      ...(canAlways
+        ? [{ option: { label: alwaysLabel, key: 'a', notePrompt: "Yes, don't ask again, and tell the model" }, answer: { behavior: 'allow' as const, always: true } }]
+        : []),
+      { option: { label: 'No', key: 'n', notePrompt: 'No, and tell the model what to do instead' }, answer: { behavior: 'deny' } },
+    ];
+    try {
+      const choice = await chooseWithNote(options.map((entry) => entry.option), { cancelIndex: options.length - 1 });
+      const answer = options[choice.index]!.answer;
+      return choice.note ? { ...answer, feedback: choice.note } : answer;
+    } finally {
+      this.afterPrompt();
+    }
+  }
+
+  /** Without a terminal to draw options in, the answer is typed. */
+  private async typedPermission(canAlways: boolean): Promise<PermissionAnswer> {
     const options = canAlways ? '[y] yes  [a] always  [n] no, or type what to do instead' : '[y] yes  [n] no, or type what to do instead';
     const answer = (await this.ask(`${options}: `))?.trim() ?? '';
     const lowered = answer.toLowerCase();

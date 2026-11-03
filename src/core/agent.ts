@@ -547,7 +547,9 @@ export class Agent {
         prepared.map(async (call) => {
           if (call.rejection !== undefined) return { content: call.rejection, isError: true, durationMs: 0 };
           const result = await this.runCall(call.use, call.tool!, call.input!, toolContext);
-          return { ...result, durationMs: Date.now() - startedAt };
+          // The note goes with this call's result, so the model reads it next to what it asked about.
+          const content = call.note ? `${result.content}\n\nThe user approved this call and added: ${call.note}` : result.content;
+          return { ...result, content, durationMs: Date.now() - startedAt };
         }),
       );
 
@@ -574,7 +576,7 @@ export class Agent {
     use: ToolUseBlock,
     tool: Tool | undefined,
     ctx: ToolContext,
-  ): Promise<{ tool?: Tool; input?: Record<string, unknown>; rejection?: string; notices: string[] }> {
+  ): Promise<{ tool?: Tool; input?: Record<string, unknown>; rejection?: string; note?: string; notices: string[] }> {
     const notices: string[] = [];
     if (!tool) return { rejection: `No such tool: ${use.name}`, notices };
 
@@ -630,10 +632,11 @@ export class Agent {
         const feedback = answer.feedback ? ` The user said: ${answer.feedback}` : '';
         return { rejection: `The user declined this call.${feedback}`, notices };
       }
+      const note = answer.feedback?.trim() ? { note: answer.feedback.trim() } : {};
       if (answer.updatedInput) {
         const invalidAnswer = validateInput(tool.inputSchema, answer.updatedInput);
         if (invalidAnswer) return { rejection: `The approval changed the input to something invalid: ${invalidAnswer}`, notices };
-        return { tool, input: answer.updatedInput, notices };
+        return { tool, input: answer.updatedInput, notices, ...note };
       }
       if (answer.always && !decision.forced) {
         for (const suggestion of decision.suggestions ?? []) {
@@ -641,6 +644,7 @@ export class Agent {
           this.options.onAlwaysAllow?.(suggestion.rule, suggestion.persist);
         }
       }
+      return { tool, input, notices, ...note };
     }
     return { tool, input, notices };
   }

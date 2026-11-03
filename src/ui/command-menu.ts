@@ -1,6 +1,6 @@
 /** The list of slash commands shown under the prompt while one is being typed. */
 import type { CommandEntry } from '../commands/slash.ts';
-import { sanitize, style } from './render.ts';
+import { clipToWidth as clip, displayWidth, sanitize, style } from './render.ts';
 
 /** Commands shown at once. The list scrolls to keep the selection in view. */
 export const MENU_ROWS = 8;
@@ -43,36 +43,6 @@ export function filterCommands(entries: CommandEntry[], query: string): CommandE
   return ranked.map(({ entry }) => entry);
 }
 
-/** Columns a character takes. Over-counting is safe here; under-counting would wrap a line. */
-function charWidth(code: number): number {
-  if ((code >= 0x300 && code <= 0x36f) || code === 0x200d || (code >= 0xfe00 && code <= 0xfe0f)) return 0;
-  const wide =
-    (code >= 0x1100 && code <= 0x115f) || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe30 && code <= 0xfe4f) || (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) || (code >= 0x1f300 && code <= 0x1faff) || (code >= 0x20000 && code <= 0x3fffd);
-  return wide ? 2 : 1;
-}
-
-function displayWidth(text: string): number {
-  let width = 0;
-  for (const char of text) width += charWidth(char.codePointAt(0)!);
-  return width;
-}
-
-/** Cuts text to fit in `width` columns, marking the cut with an ellipsis. */
-function clip(text: string, width: number): string {
-  if (width <= 0) return '';
-  if (displayWidth(text) <= width) return text;
-  let out = '';
-  let used = 0;
-  for (const char of text) {
-    const w = charWidth(char.codePointAt(0)!);
-    if (used + w > width - 1) break;
-    out += char;
-    used += w;
-  }
-  return `${out}…`;
-}
 
 function pad(text: string, width: number): string {
   return text + ' '.repeat(Math.max(0, width - displayWidth(text)));

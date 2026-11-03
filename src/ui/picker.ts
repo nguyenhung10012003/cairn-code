@@ -2,7 +2,7 @@
 import { emitKeypressEvents } from 'node:readline';
 import type { Key } from 'node:readline';
 import type { PickItem } from '../commands/slash.ts';
-import { sanitize, style } from './render.ts';
+import { clipToWidth, displayWidth, sanitize, style, tailToWidth } from './render.ts';
 
 /** Items shown at once. The list scrolls to keep the selection in view. */
 const ROWS = 10;
@@ -33,8 +33,131 @@ function printable(text: string | undefined, key: Key | undefined): string {
   return text.replace(/[\x00-\x1f\x7f]/g, '');
 }
 
-function clip(text: string, width: number): string {
-  return text.length <= width ? text : `${text.slice(0, Math.max(0, width - 1))}…`;
+const clip = clipToWidth;
+
+function padTo(text: string, width: number): string {
+  return text + ' '.repeat(Math.max(0, width - displayWidth(text)));
+}
+
+/** Writes a block of lines, over the block it drew last time. Returns how many lines it drew. */
+function redraw(out: NodeJS.WriteStream, lines: string[], drawn: number): number {
+  const back = drawn > 1 ? `\x1b[${drawn - 1}A` : '';
+  out.write(`${drawn > 0 ? `\r${back}\x1b[0J` : ''}${lines.join('\n')}`);
+  return lines.length;
+}
+
+/** Erases the block and leaves the cursor where it started. */
+function erase(out: NodeJS.WriteStream, drawn: number): void {
+  out.write(`\r${drawn > 1 ? `\x1b[${drawn - 1}A` : ''}\x1b[0J`);
+}
+
+export interface ChoiceOption {
+  label: string;
+  /** A key that picks this option at once, such as `y`. */
+  key?: string;
+  /** What the option says while a note is being typed for it, such as "No, and tell the model". */
+  notePrompt: string;
+}
+
+export interface Choice {
+  index: number;
+  /** What the user typed after pressing Tab, when anything. */
+  note?: string;
+}
+
+/**
+ * Options one per line. ↑↓ move, and Enter, the option's number or its key picks one. Tab opens
+ * a line to add a note to the highlighted option, which Enter then sends with it. Esc and Ctrl+C
+ * pick `cancelIndex`.
+ */
+export function chooseWithNote(options: ChoiceOption[], settings: { cancelIndex: number; initial?: number }): Promise<Choice> {
+  const out = process.stdout;
+  return new Promise((resolve) => {
+    let selected = settings.initial ?? 0;
+    let noting = false;
+    let note = '';
+    let drawn = 0;
+
+    const render = (): void => {
+      const width = Math.max(20, (out.columns || 80) - 1);
+      const lines = options.map((option, i) => {
+        const number = `${i + 1}. `;
+        if (i !== selected) return `  ${style.dim(number)}${clip(sanitize(option.label), width - 2 - number.length)}`;
+        if (!noting) return `${style.cyan('❯')} ${style.cyan(`${number}${clip(sanitize(option.label), width - 2 - number.length)}`)}`;
+        const prompt = `${number}${sanitize(option.notePrompt)}: `;
+        const room = Math.max(4, width - 3 - displayWidth(prompt));
+        return `${style.cyan('❯')} ${style.cyan(prompt)}${tailToWidth(sanitize(note), room)}\x1b[7m \x1b[27m`;
+      });
+      const hint = noting
+        ? '  Enter choose with this note · Esc back'
+        : `  ↑↓ move · Enter choose · Tab add a note · Esc ${options[settings.cancelIndex]!.label.toLowerCase()}`;
+      lines.push(style.dim(clip(hint, width)));
+      drawn = redraw(out, lines, drawn);
+    };
+
+    const finish = (index: number, withNote: string | undefined): void => {
+      release();
+      erase(out, drawn);
+      const option = options[index]!;
+      const text = withNote ? `${option.notePrompt}: ${withNote}` : option.label;
+      out.write(`${style.cyan('→')} ${clip(sanitize(text), Math.max(20, (out.columns || 80) - 3))}\n\x1b[?25h`);
+      resolve(withNote ? { index, note: withNote } : { index });
+    };
+
+    const release = captureKeys((text, key) => {
+      if (key?.ctrl && key.name === 'c') return finish(settings.cancelIndex, undefined);
+      if (noting) {
+        switch (key?.name) {
+          case 'return':
+          case 'enter':
+            return finish(selected, note.trim() || undefined);
+          case 'escape':
+          case 'tab':
+            noting = false;
+            note = '';
+            return render();
+          case 'backspace':
+            note = [...note].slice(0, -1).join('');
+            return render();
+        }
+        if (key?.ctrl && key.name === 'u') {
+          note = '';
+          return render();
+        }
+        const typed = printable(text, key);
+        if (typed) {
+          note += typed;
+          render();
+        }
+        return;
+      }
+      switch (key?.name) {
+        case 'up':
+          selected = (selected - 1 + options.length) % options.length;
+          return render();
+        case 'down':
+          selected = (selected + 1) % options.length;
+          return render();
+        case 'return':
+        case 'enter':
+          return finish(selected, undefined);
+        case 'tab':
+          if (key.shift) return;
+          noting = true;
+          return render();
+        case 'escape':
+          return finish(settings.cancelIndex, undefined);
+      }
+      const typed = printable(text, key).toLowerCase();
+      if (!typed) return;
+      const byNumber = Number(typed) - 1;
+      if (Number.isInteger(byNumber) && byNumber >= 0 && byNumber < options.length) return finish(byNumber, undefined);
+      const byKey = options.findIndex((option) => option.key === typed);
+      if (byKey >= 0) finish(byKey, undefined);
+    });
+    out.write('\x1b[?25l');
+    render();
+  });
 }
 
 /**
@@ -60,12 +183,12 @@ export function pickFromList(title: string, items: PickItem[], options: { initia
       selected = Math.min(selected, Math.max(0, list.length - 1));
       const width = Math.max(20, (out.columns || 80) - 1);
       const start = Math.min(Math.max(0, selected - ROWS + 1), Math.max(0, list.length - ROWS));
-      const labelWidth = Math.min(32, Math.max(0, ...list.slice(start, start + ROWS).map((item) => sanitize(item.label).length)));
+      const labelWidth = Math.min(32, Math.max(0, ...list.slice(start, start + ROWS).map((item) => displayWidth(sanitize(item.label)))));
       const lines = [style.bold(clip(sanitize(title), width))];
       lines.push(style.dim(clip(filter ? `  Filter: ${sanitize(filter)}` : '  Type to filter', width)));
       if (list.length === 0) lines.push(style.dim('  Nothing matches.'));
       list.slice(start, start + ROWS).forEach((item, i) => {
-        const label = clip(sanitize(item.label), labelWidth).padEnd(labelWidth);
+        const label = padTo(clip(sanitize(item.label), labelWidth), labelWidth);
         const detail = item.detail ? clip(sanitize(item.detail), Math.max(0, width - labelWidth - 6)) : '';
         lines.push(
           start + i === selected

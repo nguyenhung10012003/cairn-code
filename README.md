@@ -66,6 +66,8 @@ cairn purge --dry-run               # show the data stored for this project
 
 In an interactive session: `Esc` or `Ctrl+C` interrupts the running turn, `Shift+Tab` cycles the permission mode, ending a line with `\` continues it on the next line, `/help` lists commands, and `/cost` shows tokens and estimated cost.
 
+**Permission prompts** list the answers: Yes; Yes, and don't ask again (when a rule can cover the call); and No. `Up` and `Down` choose and `Enter` confirms; `1` to `3`, `y`, `a` and `n` answer at once; `Esc` answers No. `Tab` adds a note to the highlighted answer, and `Enter` sends both. A note with No tells the model what to do instead. A note with Yes reaches the model together with the call's result. Without a terminal, such as when input is piped, the answer is typed instead.
+
 **Command menu:** typing `/` lists the commands, skills and MCP prompts under the prompt, and the list narrows as you type. It matches names first: the start of a name, then any part of it, then its letters in order (`/cmp` finds `/compact`). From three letters on, it also matches words in descriptions, so `/undo` finds `/rewind`. `Up` and `Down` choose, `Enter` runs the highlighted command, `Tab` puts it on the line so you can add arguments, and `Esc` closes the list. While the list is closed, `Up` and `Down` go through history as before.
 
 ## Providers

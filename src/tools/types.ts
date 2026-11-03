@@ -30,7 +30,8 @@ export interface PermissionPrompt {
 }
 
 export type PermissionAnswer =
-  | { behavior: 'allow'; always?: boolean; updatedInput?: Record<string, unknown> }
+  /** `feedback` is a note the user added to the approval, for the model to read with the result. */
+  | { behavior: 'allow'; always?: boolean; updatedInput?: Record<string, unknown>; feedback?: string }
   | { behavior: 'deny'; feedback?: string };
 
 export interface UserQuestion {

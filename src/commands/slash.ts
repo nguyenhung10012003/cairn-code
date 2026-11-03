@@ -110,6 +110,7 @@ const BUILTINS: Record<string, BuiltinCommand> = {
         '',
         'Keys: Esc or Ctrl+C interrupts a running turn. Shift+Tab cycles the permission mode. End a line with \\ to continue it.',
         'Typing / lists commands as you type: Up and Down choose, Enter runs, Tab completes, Esc closes the list.',
+        'In a permission prompt: Up and Down choose, Enter confirms, Tab adds a note to the answer, Esc says no.',
       );
       return { output: lines.join('\n') };
     },

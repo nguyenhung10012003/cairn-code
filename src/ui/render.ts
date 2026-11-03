@@ -16,6 +16,54 @@ export const style = {
   cyan: paint('36'),
 };
 
+/** Columns a character takes. Over-counting is safe for layout; under-counting would wrap a line. */
+function charWidth(code: number): number {
+  if ((code >= 0x300 && code <= 0x36f) || code === 0x200d || (code >= 0xfe00 && code <= 0xfe0f)) return 0;
+  const wide =
+    (code >= 0x1100 && code <= 0x115f) || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) || (code >= 0xfe30 && code <= 0xfe4f) || (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) || (code >= 0x1f300 && code <= 0x1faff) || (code >= 0x20000 && code <= 0x3fffd);
+  return wide ? 2 : 1;
+}
+
+/** Terminal columns plain text takes, counting East Asian wide characters and emoji as two. */
+export function displayWidth(text: string): number {
+  let width = 0;
+  for (const char of text) width += charWidth(char.codePointAt(0)!);
+  return width;
+}
+
+/** Cuts plain text to fit in `width` columns, marking the cut with an ellipsis. */
+export function clipToWidth(text: string, width: number): string {
+  if (width <= 0) return '';
+  if (displayWidth(text) <= width) return text;
+  let out = '';
+  let used = 0;
+  for (const char of text) {
+    const w = charWidth(char.codePointAt(0)!);
+    if (used + w > width - 1) break;
+    out += char;
+    used += w;
+  }
+  return `${out}…`;
+}
+
+/** The end of plain text that fits in `width` columns, so the cursor end of a long input stays visible. */
+export function tailToWidth(text: string, width: number): string {
+  if (width <= 0) return '';
+  if (displayWidth(text) <= width) return text;
+  const chars = [...text];
+  let out = '';
+  let used = 1;
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const w = charWidth(chars[i]!.codePointAt(0)!);
+    if (used + w > width) break;
+    out = chars[i]! + out;
+    used += w;
+  }
+  return `…${out}`;
+}
+
 /**
  * Removes control characters from anything the model or a tool produced. Printed raw, escape
  * sequences in a file or web page could rewrite the screen, or fake a permission prompt.
