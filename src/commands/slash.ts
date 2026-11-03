@@ -47,6 +47,14 @@ export interface CommandIO {
   pick?(title: string, items: PickItem[], options?: { initial?: string; allowCustom?: boolean }): Promise<string | null>;
   /** One line of text, or null. With `secret`, what is typed is not shown. Absent where nobody is there to answer. */
   ask?(question: string, options?: { secret?: boolean }): Promise<string | null>;
+  /** Messages to run once the current work is done. Only the interactive session has one. */
+  queue?: {
+    /** Returns the message's place in the queue. */
+    add(text: string): number;
+    list(): string[];
+    /** Returns how many were removed. */
+    clear(): number;
+  };
 }
 
 interface BuiltinCommand {
@@ -111,6 +119,8 @@ const BUILTINS: Record<string, BuiltinCommand> = {
         'Keys: Esc or Ctrl+C interrupts a running turn. Shift+Tab cycles the permission mode. End a line with \\ to continue it.',
         'Typing / lists commands as you type: Up and Down choose, Enter runs, Tab completes, Esc closes the list.',
         'In a permission prompt: Up and Down choose, Enter confirms, Tab adds a note to the answer, Esc says no.',
+        'A message waits 3 seconds before it is sent: type more to add to it, Enter on an empty line to send it now, Esc to edit it.',
+        'Sending a message while the agent works stops that work and answers the new message. /queue <message> waits its turn instead.',
       );
       return { output: lines.join('\n') };
     },
@@ -167,6 +177,20 @@ const BUILTINS: Record<string, BuiltinCommand> = {
   model: {
     description: 'Choose the model, from a list or by name. Kept for new sessions',
     run: (args, runtime, io) => modelCommand(args, runtime, io),
+  },
+  queue: {
+    description: 'Run a message after the current work is done. Also: /queue to list, /queue clear',
+    run: (args, _runtime, io) => {
+      if (!io.queue) return { output: 'There is a queue only in an interactive session.' };
+      if (!args) {
+        const items = io.queue.list();
+        if (items.length === 0) return { output: 'The queue is empty. Add to it with /queue <message>.' };
+        return { output: items.map((item, i) => `  ${i + 1}. ${item.replace(/\s+/g, ' ').slice(0, 100)}`).join('\n') };
+      }
+      if (args === 'clear') return { output: `Removed ${io.queue.clear()} queued message(s).` };
+      const place = io.queue.add(args);
+      return { output: `Queued as #${place}. It runs when the current work is done.` };
+    },
   },
   provider: {
     description: 'Switch provider, or: /provider add, /provider key <name>, /provider remove <name>, /provider list',

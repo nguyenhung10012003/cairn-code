@@ -330,8 +330,9 @@ async function main(): Promise<number> {
     prompter: printMode ? new NonInteractivePrompter() : terminal.prompter,
     trust,
     persist: values['no-session-persistence'] !== true,
-    onNotice: (text) => (printMode ? process.stderr : process.stdout).write(`\n${sanitize(text)}\n`),
-    ...(printMode ? {} : { onProgress: (text: string) => process.stdout.write(`${text}\n`) }),
+    // Through the terminal in a session, so a notice lands above the line being typed.
+    onNotice: (text) => (printMode ? process.stderr.write(`\n${sanitize(text)}\n`) : terminal.print(`${sanitize(text)}\n`)),
+    ...(printMode ? {} : { onProgress: (text: string) => terminal.print(`${text}\n`) }),
     ...(values['mcp-config'] === undefined ? {} : { mcpConfig: values['mcp-config'] }),
     ...(values['strict-mcp-config'] ? { strictMcpConfig: true } : {}),
     ...(values.provider === undefined ? {} : { providerName: values.provider }),

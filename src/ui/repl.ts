@@ -1,85 +1,48 @@
-/** The interactive terminal session. */
+/**
+ * The interactive terminal session. Input stays live while the agent works: a message waits a
+ * moment before it is sent, so more can be added to it, and sending one while the agent is busy
+ * stops the current work and answers the newest message instead. /queue holds messages until the
+ * current work is done.
+ */
 import { emitKeypressEvents } from 'node:readline';
 import { createInterface } from 'node:readline';
-import type { Key } from 'node:readline';
 import { APP_DISPLAY_NAME, VERSION } from '../config/paths.ts';
-import { commandEntries, runSlashCommand, settleCommand } from '../commands/slash.ts';
-import type { CommandEntry, CommandIO, CommandResult } from '../commands/slash.ts';
-import { CommandMenu } from './command-menu.ts';
-import { chooseWithNote, pickFromList, readSecret } from './picker.ts';
-import type { ChoiceOption } from './picker.ts';
-import type { SkillActivation } from '../skills/skills.ts';
+import { commandEntries, parseSlash, runSlashCommand, settleCommand } from '../commands/slash.ts';
+import type { CommandIO, CommandResult } from '../commands/slash.ts';
 import type { AgentEvent } from '../core/agent.ts';
+import { contextTokens } from '../core/messages.ts';
 import type { Runtime } from '../core/runtime.ts';
 import type { PermissionMode } from '../permissions/engine.ts';
+import type { SkillActivation } from '../skills/skills.ts';
 import type { PermissionAnswer, PermissionPrompt, Prompter, UserQuestion } from '../tools/types.ts';
-import { displayWidth, MarkdownStream, permissionPreview, sanitize, Spinner, style, toolResultSummary, toolSummary } from './render.ts';
+import { Footer } from './footer.ts';
+import { chooseWithNote, pickFromList, readSecret } from './picker.ts';
+import type { ChoiceOption } from './picker.ts';
+import { clipToWidth, displayWidth, MarkdownStream, permissionPreview, sanitize, style, toolResultSummary, toolSummary } from './render.ts';
 
 const stdin = process.stdin;
 const stdout = process.stdout;
 
-type KeyListener = (text: string | undefined, key: Key | undefined) => void;
+/** How long a typed message waits before it is sent, so more can be added to it. */
+export const SEND_DELAY_MS = 3_000;
 
-/** Everything that reads a line from the keyboard goes through one short-lived readline. */
+/** Commands that leave the running work alone, so they may run alongside it. */
+const WHILE_BUSY = new Set([
+  'help', 'status', 'cost', 'usage', 'context', 'todos', 'tasks', 'queue', 'copy', 'diff', 'mode', 'effort',
+  'permissions', 'agents', 'skills', 'memory', 'hooks', 'btw', 'exit', 'quit',
+]);
+
+const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/** Questions that are not the main prompt read a line through a short-lived readline. */
 class LineInput {
-  private history: string[] = [];
-  private commands: () => CommandEntry[] = () => [];
-  onShiftTab: (() => void) | undefined;
-
-  setCommands(provider: () => CommandEntry[]): void {
-    this.commands = provider;
-  }
-
-  /** `commands` shows the command menu while the line starts with a slash. */
-  read(prompt: string, options: { history?: boolean; commands?: boolean; signal?: AbortSignal } = {}): Promise<string | null> {
+  read(prompt: string): Promise<string | null> {
     return new Promise((resolve) => {
-      const before = stdin.listeners('keypress');
-      const rl = createInterface({
-        input: stdin,
-        output: stdout,
-        terminal: true,
-        historySize: options.history ? 500 : 0,
-        history: options.history ? this.history : [],
-        removeHistoryDuplicates: true,
-        completer: (line: string): [string[], string] => {
-          if (!line.startsWith('/')) return [[], line];
-          return [this.commands().map((entry) => `/${entry.name}`).filter((name) => name.startsWith(line)), line];
-        },
-      });
-      // Readline reads keys through a keypress listener of its own. Calling it from here lets
-      // the command menu see each key first and keep the ones it uses away from readline.
-      const readlineKeys = stdin.listeners('keypress').filter((listener) => !before.includes(listener)) as KeyListener[];
-      for (const listener of readlineKeys) stdin.off('keypress', listener);
-      const menu = options.commands && stdout.isTTY
-        ? new CommandMenu({ rl, entries: this.commands, write: (text) => stdout.write(text), columns: () => stdout.columns || 80 })
-        : null;
-      if (options.history) rl.on('history', (updated: string[]) => (this.history = updated));
+      const rl = createInterface({ input: stdin, output: stdout, terminal: true, historySize: 0 });
       let settled = false;
-      // A wake (background work finishing, a scheduled prompt) closes the prompt so it can be handled.
-      const onWakeAbort = (): void => finish(null);
-      options.signal?.addEventListener('abort', onWakeAbort, { once: true });
-      const onKey: KeyListener = (text, key) => {
-        if (key?.name === 'tab' && key.shift) {
-          // Not passed on: readline takes it for Tab and would complete the line.
-          if (!this.onShiftTab) return;
-          this.onShiftTab();
-          rl.setPrompt(promptProvider());
-          rl.prompt(true);
-          menu?.update(key);
-          return;
-        }
-        if (menu?.handle(key)) return;
-        for (const listener of readlineKeys) listener.call(stdin, text, key);
-        if (!settled) menu?.update(key);
-      };
-      const promptProvider = (): string => (options.history ? this.currentPrompt() : prompt);
-      stdin.on('keypress', onKey);
       const finish = (value: string | null): void => {
         if (settled) return;
         settled = true;
-        menu?.close();
-        stdin.off('keypress', onKey);
-        options.signal?.removeEventListener('abort', onWakeAbort);
         rl.close();
         resolve(value);
       };
@@ -91,13 +54,11 @@ class LineInput {
       rl.question(prompt, (answer) => finish(answer));
     });
   }
-
-  currentPrompt: () => string = () => '> ';
 }
 
 class TerminalPrompter implements Prompter {
   private readonly input: LineInput;
-  /** Set by the turn runner: stops the spinner and key watcher while a question is open. */
+  /** Set by the session: moves the footer out of the way while a question is open. */
   beforePrompt: () => void = () => {};
   afterPrompt: () => void = () => {};
 
@@ -105,52 +66,49 @@ class TerminalPrompter implements Prompter {
     this.input = input;
   }
 
-  private async ask(text: string): Promise<string | null> {
+  /** Runs one whole question with the footer out of the way. */
+  private async asking<T>(work: () => Promise<T>): Promise<T> {
     this.beforePrompt();
     try {
-      return await this.input.read(text);
+      return await work();
     } finally {
       this.afterPrompt();
     }
   }
 
-  async permission(prompt: PermissionPrompt): Promise<PermissionAnswer> {
-    this.beforePrompt();
-    stdout.write(`\n${style.yellow(style.bold(`${prompt.toolName} needs your approval`))}\n`);
-    for (const line of permissionPreview(prompt.toolName, prompt.input)) stdout.write(`${line}\n`);
-    stdout.write(`${style.dim(sanitize(prompt.reason))}\n`);
-    const canAlways = !prompt.forced && prompt.suggestions.length > 0;
-    const rules = prompt.suggestions.map((suggestion) => suggestion.rule).join(', ');
-    const where = prompt.suggestions.some((suggestion) => suggestion.persist) ? 'saved for this project' : 'for this session';
-    const alwaysLabel = `Yes, and don't ask again for ${rules} (${where})`;
-    // A rule too long for the option line is shown in full above it.
-    if (canAlways && displayWidth(alwaysLabel) > (stdout.columns || 80) - 6) {
-      for (const suggestion of prompt.suggestions) {
-        stdout.write(style.dim(`  don't ask again would add: ${sanitize(suggestion.rule)} (${suggestion.persist ? 'saved for this project' : 'this session'})\n`));
+  permission(prompt: PermissionPrompt): Promise<PermissionAnswer> {
+    return this.asking(async () => {
+      stdout.write(`\n${style.yellow(style.bold(`${prompt.toolName} needs your approval`))}\n`);
+      for (const line of permissionPreview(prompt.toolName, prompt.input)) stdout.write(`${line}\n`);
+      stdout.write(`${style.dim(sanitize(prompt.reason))}\n`);
+      const canAlways = !prompt.forced && prompt.suggestions.length > 0;
+      const rules = prompt.suggestions.map((suggestion) => suggestion.rule).join(', ');
+      const where = prompt.suggestions.some((suggestion) => suggestion.persist) ? 'saved for this project' : 'for this session';
+      const alwaysLabel = `Yes, and don't ask again for ${rules} (${where})`;
+      // A rule too long for the option line is shown in full above it.
+      if (canAlways && displayWidth(alwaysLabel) > (stdout.columns || 80) - 6) {
+        for (const suggestion of prompt.suggestions) {
+          stdout.write(style.dim(`  don't ask again would add: ${sanitize(suggestion.rule)} (${suggestion.persist ? 'saved for this project' : 'this session'})\n`));
+        }
       }
-    }
-
-    if (!stdin.isTTY || !stdout.isTTY) return this.typedPermission(canAlways);
-    const options: { option: ChoiceOption; answer: PermissionAnswer }[] = [
-      { option: { label: 'Yes', key: 'y', notePrompt: 'Yes, and tell the model' }, answer: { behavior: 'allow' } },
-      ...(canAlways
-        ? [{ option: { label: alwaysLabel, key: 'a', notePrompt: "Yes, don't ask again, and tell the model" }, answer: { behavior: 'allow' as const, always: true } }]
-        : []),
-      { option: { label: 'No', key: 'n', notePrompt: 'No, and tell the model what to do instead' }, answer: { behavior: 'deny' } },
-    ];
-    try {
+      if (!stdin.isTTY || !stdout.isTTY) return this.typedPermission(canAlways);
+      const options: { option: ChoiceOption; answer: PermissionAnswer }[] = [
+        { option: { label: 'Yes', key: 'y', notePrompt: 'Yes, and tell the model' }, answer: { behavior: 'allow' } },
+        ...(canAlways
+          ? [{ option: { label: alwaysLabel, key: 'a', notePrompt: "Yes, don't ask again, and tell the model" }, answer: { behavior: 'allow' as const, always: true } }]
+          : []),
+        { option: { label: 'No', key: 'n', notePrompt: 'No, and tell the model what to do instead' }, answer: { behavior: 'deny' } },
+      ];
       const choice = await chooseWithNote(options.map((entry) => entry.option), { cancelIndex: options.length - 1 });
       const answer = options[choice.index]!.answer;
       return choice.note ? { ...answer, feedback: choice.note } : answer;
-    } finally {
-      this.afterPrompt();
-    }
+    });
   }
 
   /** Without a terminal to draw options in, the answer is typed. */
   private async typedPermission(canAlways: boolean): Promise<PermissionAnswer> {
     const options = canAlways ? '[y] yes  [a] always  [n] no, or type what to do instead' : '[y] yes  [n] no, or type what to do instead';
-    const answer = (await this.ask(`${options}: `))?.trim() ?? '';
+    const answer = (await this.input.read(`${options}: `))?.trim() ?? '';
     const lowered = answer.toLowerCase();
     if (lowered === 'y' || lowered === 'yes') return { behavior: 'allow' };
     if (canAlways && (lowered === 'a' || lowered === 'always')) return { behavior: 'allow', always: true };
@@ -158,131 +116,117 @@ class TerminalPrompter implements Prompter {
     return { behavior: 'deny', feedback: answer };
   }
 
-  async questions(questions: UserQuestion[]): Promise<string[] | null> {
-    this.beforePrompt();
-    const answers: string[] = [];
-    for (const question of questions) {
-      stdout.write(`\n${style.bold(sanitize(question.question))}\n`);
-      question.options.forEach((option, i) => {
-        const description = option.description ? style.dim(` - ${sanitize(option.description)}`) : '';
-        stdout.write(`  ${i + 1}. ${sanitize(option.label)}${description}\n`);
-      });
-      const hint = question.multiSelect ? 'Numbers separated by commas, or your own answer: ' : 'Number, or your own answer: ';
-      const raw = (await this.ask(hint))?.trim() ?? '';
-      const picks = raw.split(',').map((part) => Number.parseInt(part.trim(), 10));
-      const valid = raw !== '' && picks.every((n) => Number.isInteger(n) && n >= 1 && n <= question.options.length);
-      answers.push(valid ? picks.map((n) => question.options[n - 1]!.label).join(', ') : raw);
-    }
-    return answers;
+  questions(questions: UserQuestion[]): Promise<string[] | null> {
+    return this.asking(async () => {
+      const answers: string[] = [];
+      for (const question of questions) {
+        stdout.write(`\n${style.bold(sanitize(question.question))}\n`);
+        question.options.forEach((option, i) => {
+          const description = option.description ? style.dim(` - ${sanitize(option.description)}`) : '';
+          stdout.write(`  ${i + 1}. ${sanitize(option.label)}${description}\n`);
+        });
+        const hint = question.multiSelect ? 'Numbers separated by commas, or your own answer: ' : 'Number, or your own answer: ';
+        const raw = (await this.input.read(hint))?.trim() ?? '';
+        const picks = raw.split(',').map((part) => Number.parseInt(part.trim(), 10));
+        const valid = raw !== '' && picks.every((n) => Number.isInteger(n) && n >= 1 && n <= question.options.length);
+        answers.push(valid ? picks.map((n) => question.options[n - 1]!.label).join(', ') : raw);
+      }
+      return answers;
+    });
   }
 
-  async approvePlan(plan: string): Promise<boolean> {
-    this.beforePrompt();
-    stdout.write(`\n${style.bold('Proposed plan')}\n${sanitize(plan)}\n\n`);
-    const answer = (await this.ask('Approve and start? [y/N]: '))?.trim().toLowerCase();
-    return answer === 'y' || answer === 'yes';
+  approvePlan(plan: string): Promise<boolean> {
+    return this.asking(async () => {
+      stdout.write(`\n${style.bold('Proposed plan')}\n${sanitize(plan)}\n\n`);
+      const answer = (await this.input.read('Approve and start? [y/N]: '))?.trim().toLowerCase();
+      return answer === 'y' || answer === 'yes';
+    });
   }
 }
 
-export function createTerminalPrompter(): { prompter: TerminalPrompter; input: LineInput } {
+export interface Terminal {
+  prompter: TerminalPrompter;
+  input: LineInput;
+  /** Prints a line for the user, above the input once the session has started. */
+  print(text: string): void;
+}
+
+export function createTerminalPrompter(): Terminal {
   const input = new LineInput();
-  return { prompter: new TerminalPrompter(input), input };
+  const terminal: Terminal = {
+    prompter: new TerminalPrompter(input),
+    input,
+    print: (text) => stdout.write(text),
+  };
+  return terminal;
 }
 
-function renderEvent(event: AgentEvent, runtime: Runtime, md: MarkdownStream, thinking: MarkdownStream, spinner: Spinner): void {
+function renderEvent(event: AgentEvent, runtime: Runtime, md: MarkdownStream, thinking: MarkdownStream, print: (text: string) => void): void {
   if (event.type !== 'thinking_delta') thinking.flush();
   switch (event.type) {
     case 'text_delta':
-      spinner.stop();
       md.push(event.text);
       break;
     case 'thinking_delta':
-      spinner.stop();
       thinking.push(event.text);
       break;
     case 'server_tool':
       md.flush();
-      spinner.stop();
-      stdout.write(`${style.cyan('●')} ${style.bold(sanitize(event.name))}${event.summary ? style.dim(`(${sanitize(event.summary)})`) : ''}\n`);
-      spinner.start();
+      print(`${style.cyan('●')} ${style.bold(sanitize(event.name))}${event.summary ? style.dim(`(${sanitize(event.summary)})`) : ''}\n`);
       break;
     case 'tool_start': {
       md.flush();
-      spinner.stop();
       const summary = toolSummary(event.name, event.input, runtime.context.cwd());
-      stdout.write(`${style.cyan('●')} ${style.bold(event.name)}${summary ? style.dim(`(${summary})`) : ''}\n`);
-      spinner.start();
+      print(`${style.cyan('●')} ${style.bold(event.name)}${summary ? style.dim(`(${summary})`) : ''}\n`);
       break;
     }
     case 'tool_end':
-      spinner.stop();
-      stdout.write(`  ${style.dim('⎿')}  ${toolResultSummary(event.output, event.display, event.isError)}\n`);
-      spinner.start();
+      print(`  ${style.dim('⎿')}  ${toolResultSummary(event.output, event.display, event.isError)}\n`);
       break;
     case 'notice':
       md.flush();
-      spinner.stop();
-      stdout.write(`${event.level === 'warn' ? style.yellow('! ') : ''}${sanitize(event.text)}\n`);
+      print(`${event.level === 'warn' ? style.yellow('! ') : ''}${sanitize(event.text)}\n`);
       break;
     case 'compacted':
       md.flush();
-      spinner.stop();
-      stdout.write(`${style.dim('Conversation compacted to free up context.')}\n`);
+      print(`${style.dim('Conversation compacted to free up context.')}\n`);
       break;
     case 'usage':
       break;
     case 'turn_end':
       md.flush();
-      spinner.stop();
-      if (event.stopReason === 'interrupted') stdout.write(`${style.yellow('Interrupted.')}\n`);
-      if (event.stopReason === 'error') stdout.write(`${style.red(`Error: ${sanitize(event.error ?? 'unknown')}`)}\n`);
+      if (event.stopReason === 'interrupted') print(`${style.yellow('Interrupted.')}\n`);
+      if (event.stopReason === 'error') print(`${style.red(`Error: ${sanitize(event.error ?? 'unknown')}`)}\n`);
       break;
   }
 }
 
-/** Watches for Esc and Ctrl+C while the agent runs. Other keys are ignored. */
-function watchInterrupt(onInterrupt: () => void): { pause: () => void; resume: () => void; stop: () => void } {
-  const onKey = (_text: string | undefined, key: Key | undefined): void => {
-    if (key?.name === 'escape' || (key?.ctrl && key.name === 'c')) onInterrupt();
-  };
-  const resume = (): void => {
-    stdin.setRawMode?.(true);
-    stdin.resume();
-    stdin.on('keypress', onKey);
-  };
-  const pause = (): void => {
-    stdin.off('keypress', onKey);
-  };
-  resume();
-  return {
-    pause,
-    resume,
-    stop: () => {
-      pause();
-      stdin.setRawMode?.(false);
-      stdin.pause();
-    },
-  };
+/** 950, 12.3k, 4.1M. */
+function shortCount(count: number): string {
+  if (count < 1_000) return String(count);
+  if (count < 1_000_000) return `${(count / 1_000).toFixed(count < 10_000 ? 1 : 0)}k`;
+  return `${(count / 1_000_000).toFixed(1)}M`;
 }
 
-export async function runRepl(
-  runtime: Runtime,
-  terminal: { prompter: TerminalPrompter; input: LineInput },
-  initialPrompt?: string,
-): Promise<void> {
+function elapsed(since: number): string {
+  const seconds = Math.floor((Date.now() - since) / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+}
+
+const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+/** What the user typed, as it appears in the conversation above the prompt. */
+function echo(text: string): string {
+  const [first, ...rest] = sanitize(text).split('\n');
+  return `${style.cyan('>')} ${first}${rest.map((line) => `\n  ${line}`).join('')}\n`;
+}
+
+export async function runRepl(runtime: Runtime, terminal: Terminal, initialPrompt?: string): Promise<void> {
   emitKeypressEvents(stdin);
   const { input, prompter } = terminal;
-  input.setCommands(() => commandEntries(runtime));
   const promptText = (): string => {
     const mode = runtime.engine.mode;
     return `${mode === 'default' ? '' : style.yellow(`[${mode}] `)}${style.cyan('>')} `;
-  };
-  input.currentPrompt = promptText;
-  input.onShiftTab = () => {
-    // Riskier modes are never one keypress away: they have to be chosen by name, or allowed at startup.
-    const modes: PermissionMode[] = ['default', 'acceptEdits', 'plan', ...(runtime.allowBypassMode ? (['bypassPermissions'] as const) : [])];
-    const index = modes.indexOf(runtime.engine.mode);
-    runtime.engine.mode = modes[(index + 1) % modes.length]!;
   };
 
   stdout.write(`${style.bold(APP_DISPLAY_NAME)} ${style.dim(`v${VERSION}  ${runtime.providerName} / ${runtime.agent.model}`)}\n`);
@@ -296,111 +240,270 @@ export async function runRepl(
   }
   stdout.write('\n');
 
-  const withInterrupt = async (work: (signal: AbortSignal, spinner: Spinner) => Promise<void>): Promise<void> => {
-    const controller = new AbortController();
-    const spinner = new Spinner();
-    const watcher = watchInterrupt(() => controller.abort());
-    prompter.beforePrompt = () => {
-      spinner.stop();
-      watcher.pause();
-    };
-    prompter.afterPrompt = () => {
-      watcher.resume();
-      spinner.start();
-    };
-    spinner.start();
-    try {
-      await work(controller.signal, spinner);
-    } finally {
-      spinner.stop();
-      watcher.stop();
-      prompter.beforePrompt = () => {};
-      prompter.afterPrompt = () => {};
+  /** The work running now: a turn, a compaction, or a command's slow part. */
+  let busy: { controller: AbortController; startedAt: number; label: string } | null = null;
+  /** A typed message waiting out SEND_DELAY_MS. */
+  let pending: { text: string; deadline: number; timer: NodeJS.Timeout } | null = null;
+  const queue: string[] = [];
+  /** Work runs one piece at a time, in the order it was scheduled. */
+  let chain: Promise<void> = Promise.resolve();
+  let scheduled = 0;
+  let exiting = false;
+  let frame = 0;
+  let quitHinted = false;
+  let resolveExit!: () => void;
+  const exited = new Promise<void>((resolve) => (resolveExit = resolve));
+
+  const statusLine = (): string => {
+    const parts: string[] = [];
+    if (pending) {
+      const seconds = Math.max(1, Math.ceil((pending.deadline - Date.now()) / 1000));
+      parts.push(`Sending in ${seconds}s · Enter sends now · Esc to edit`);
+    } else if (busy) {
+      parts.push(`${FRAMES[frame % FRAMES.length]} ${busy.label} ${elapsed(busy.startedAt)} · Esc to stop`);
     }
+    const agents = runtime.backgroundAgents.running();
+    if (agents > 0) parts.push(plural(agents, 'agent'));
+    const running = runtime.context.tasks.running();
+    const shells = running.filter((task) => task.kind !== 'monitor').length;
+    const monitors = running.length - shells;
+    if (shells > 0) parts.push(plural(shells, 'shell'));
+    if (monitors > 0) parts.push(plural(monitors, 'monitor'));
+    if (queue.length > 0) parts.push(`${queue.length} queued`);
+    const usage = runtime.agent.totalUsage;
+    parts.push(`${shortCount(contextTokens(usage) + usage.outputTokens)} tokens`);
+    return parts.join(' · ');
   };
 
-  const runTurn = (text: string, activation?: SkillActivation): Promise<void> =>
-    withInterrupt(async (signal, spinner) => {
-      const md = new MarkdownStream((chunk) => stdout.write(chunk));
-      const thinking = new MarkdownStream((chunk) => stdout.write(style.dim(chunk)));
-      for await (const event of runtime.agent.run(text, signal, activation)) renderEvent(event, runtime, md, thinking, spinner);
-    });
+  const footer = new Footer({
+    prompt: promptText,
+    status: statusLine,
+    above: (width) => {
+      if (!pending) return [];
+      const lines = sanitize(pending.text).split('\n');
+      const shown = lines.slice(0, 3).map((line, i) => style.dim(clipToWidth(`${i === 0 ? '⏳ ' : '   '}${line}`, width - 1)));
+      return lines.length > 3 ? [...shown, style.dim('   …')] : shown;
+    },
+    commands: () => commandEntries(runtime),
+    onSubmit: (text) => submit(text),
+    onEscape: () => escape(),
+    onInterrupt: () => {
+      if (pending || busy) return escape();
+      if (!quitHinted) print(style.dim('Press Ctrl+D or type /exit to quit.\n'));
+      quitHinted = true;
+    },
+    onEof: () => void exit(),
+    onShiftTab: () => {
+      // Riskier modes are never one keypress away: they have to be chosen by name, or allowed at startup.
+      const modes: PermissionMode[] = ['default', 'acceptEdits', 'plan', ...(runtime.allowBypassMode ? (['bypassPermissions'] as const) : [])];
+      const index = modes.indexOf(runtime.engine.mode);
+      runtime.engine.mode = modes[(index + 1) % modes.length]!;
+    },
+  });
+  const print = (text: string): void => footer.print(text);
+  terminal.print = print;
+  prompter.beforePrompt = () => footer.suspend();
+  prompter.afterPrompt = () => footer.resume();
 
   const io: CommandIO = {
     choose: async (title, options) => {
-      const value = await pickFromList(title, options.map((label, i) => ({ value: String(i), label })));
+      const value = await footer.during(() => pickFromList(title, options.map((label, i) => ({ value: String(i), label }))));
       return value === null ? null : Number(value);
     },
-    pick: (title, items, options) => pickFromList(title, items, options),
-    ask: (question, options) => (options?.secret ? readSecret(question) : input.read(question)),
+    pick: (title, items, options) => footer.during(() => pickFromList(title, items, options)),
+    ask: (question, options) => footer.during(() => (options?.secret ? readSecret(question) : input.read(question))),
+    queue: {
+      add: (text) => {
+        queue.push(text);
+        // Started after the command's own reply is printed.
+        setTimeout(afterIdle, 0);
+        return queue.length;
+      },
+      list: () => [...queue],
+      clear: () => queue.splice(0).length,
+    },
   };
 
-  // Background work finishing, and scheduled prompts coming due, drive turns without the user typing.
-  const runNotes = (): Promise<void> =>
-    withInterrupt(async (signal, spinner) => {
-      const md = new MarkdownStream((chunk) => stdout.write(chunk));
-      const thinking = new MarkdownStream((chunk) => stdout.write(style.dim(chunk)));
-      for await (const event of runtime.agent.resumeForNotes(signal)) renderEvent(event, runtime, md, thinking, spinner);
-    });
-  const drainWakes = async (): Promise<void> => {
-    while (runtime.wakes.pending()) {
+  const schedule = (work: () => Promise<void>): void => {
+    scheduled++;
+    chain = chain
+      .then(async () => {
+        scheduled--;
+        if (!exiting) await work();
+      })
+      .catch((error: unknown) => print(`${style.red(sanitize((error as Error).message))}\n`));
+  };
+
+  const runBusy = async (label: string, work: (signal: AbortSignal) => Promise<void>): Promise<void> => {
+    const controller = new AbortController();
+    busy = { controller, startedAt: Date.now(), label };
+    footer.render();
+    try {
+      await work(controller.signal);
+    } catch (error) {
+      print(`${style.red(sanitize((error as Error).message))}\n`);
+    } finally {
+      busy = null;
+      footer.render();
+      setTimeout(afterIdle, 0);
+    }
+  };
+
+  const streamEvents = async (events: AsyncIterable<AgentEvent>): Promise<void> => {
+    const md = new MarkdownStream(print);
+    const thinking = new MarkdownStream((chunk) => print(style.dim(chunk)));
+    for await (const event of events) renderEvent(event, runtime, md, thinking, print);
+  };
+  const runTurn = (text: string, activation?: SkillActivation): Promise<void> =>
+    runBusy('Working', (signal) => streamEvents(runtime.agent.run(text, signal, activation)));
+
+  /** Starts what is waiting once nothing runs: background work's news first, then the queue. */
+  const afterIdle = (): void => {
+    if (exiting || busy || scheduled > 0 || pending) return;
+    if (runtime.wakes.pending()) {
       const { prompts, notes } = runtime.wakes.take();
-      for (const prompt of prompts) await runTurn(prompt);
-      if (notes) await runNotes();
+      for (const prompt of prompts) schedule(() => runTurn(prompt));
+      if (notes) schedule(() => runBusy('Working', (signal) => streamEvents(runtime.agent.resumeForNotes(signal))));
+      return;
+    }
+    const next = queue.shift();
+    if (next === undefined) return;
+    footer.render();
+    if (next.startsWith('/')) {
+      print(echo(next));
+      schedule(() => runCommand(next));
+    } else {
+      print(echo(next));
+      schedule(() => runTurn(next));
     }
   };
+  const stopWaking = runtime.wakes.onWake(() => setTimeout(afterIdle, 0));
 
-  if (initialPrompt) await runTurn(initialPrompt);
+  /** Sends a message: whatever is running stops, and the conversation goes on from this one. */
+  const send = (text: string): void => {
+    print(echo(text));
+    busy?.controller.abort();
+    schedule(() => runTurn(text));
+  };
 
-  for (;;) {
-    await drainWakes();
-    const wake = new AbortController();
-    const stopWaking = runtime.wakes.onWake(() => wake.abort());
-    let line = await input.read(promptText(), { history: true, commands: true, signal: wake.signal });
-    stopWaking();
-    // A null line means end-of-input, unless a wake closed the prompt so we can handle it.
-    if (line === null && runtime.wakes.pending()) continue;
-    if (line === null) break;
-    while (line.endsWith('\\')) {
-      const more = await input.read(style.dim('… '));
-      if (more === null) break;
-      line = `${line.slice(0, -1)}\n${more}`;
+  const sendPending = (): void => {
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    const { text } = pending;
+    pending = null;
+    send(text);
+  };
+
+  /** A typed message waits, and more typed in the meantime joins it. */
+  const addPending = (text: string): void => {
+    if (pending) clearTimeout(pending.timer);
+    const merged = pending ? `${pending.text}\n\n${text}` : text;
+    pending = { text: merged, deadline: Date.now() + SEND_DELAY_MS, timer: setTimeout(sendPending, SEND_DELAY_MS) };
+    footer.render();
+  };
+
+  /** Esc: a waiting message goes back to the line to edit; otherwise running work stops. */
+  const escape = (): void => {
+    if (pending) {
+      clearTimeout(pending.timer);
+      const typed = footer.editor.text;
+      footer.editor.setText(typed ? `${pending.text}\n${typed}` : pending.text);
+      pending = null;
+      footer.render();
+      return;
     }
-    const text = line.trim();
-    if (!text) continue;
+    busy?.controller.abort();
+  };
 
-    if (text.startsWith('/')) {
-      let result: CommandResult = {};
-      try {
-        result = await runSlashCommand(text, runtime, io);
-        if (result.run) {
-          // Deferred work can run injected commands or wait on a browser, so it can be interrupted.
-          const started = result;
-          await withInterrupt(async (signal) => {
-            result = await settleCommand(started, signal);
-          });
+  const runCommand = async (text: string): Promise<void> => {
+    let result: CommandResult;
+    try {
+      result = await runSlashCommand(text, runtime, io);
+      if (result.run) {
+        const started = result;
+        // Deferred work can run injected commands or wait on a browser, so it can be stopped.
+        if (busy) result = await settleCommand(started, new AbortController().signal);
+        else await runBusy('Working', async (signal) => void (result = await settleCommand(started, signal)));
+      }
+    } catch (error) {
+      print(`${style.red(sanitize((error as Error).message))}\n`);
+      return;
+    }
+    if (result.output) print(`${sanitize(result.output)}\n`);
+    if (result.exit) return exit();
+    if (result.compact) {
+      const focus = result.compact.focus;
+      await runBusy('Compacting', async (signal) => {
+        try {
+          await runtime.agent.compact(focus ?? '', signal);
+          print(`${style.dim('Conversation compacted.')}\n`);
+        } catch (error) {
+          print(`${style.red(`Compaction failed: ${sanitize((error as Error).message)}`)}\n`);
         }
-      } catch (error) {
-        stdout.write(`${style.red(sanitize((error as Error).message))}\n`);
-        continue;
-      }
-      if (result.output) stdout.write(`${sanitize(result.output)}\n`);
-      if (result.exit) break;
-      if (result.compact) {
-        const focus = result.compact.focus;
-        await withInterrupt(async (signal) => {
-          try {
-            await runtime.agent.compact(focus ?? '', signal);
-            stdout.write(`${style.dim('Conversation compacted.')}\n`);
-          } catch (error) {
-            stdout.write(`${style.red(`Compaction failed: ${sanitize((error as Error).message)}`)}\n`);
-          }
-        });
-      }
-      if (result.prompt) await runTurn(result.prompt, result.activation);
-      continue;
+      });
     }
-    await runTurn(text);
-  }
+    if (result.prompt) await runTurn(result.prompt, result.activation);
+  };
+
+  const command = (text: string): void => {
+    const name = parseSlash(text)?.name ?? '';
+    if (name === 'exit' || name === 'quit') {
+      print(echo(text));
+      void exit();
+      return;
+    }
+    if (busy || scheduled > 0) {
+      if (!WHILE_BUSY.has(name)) {
+        print(style.dim(`/${name} waits for the current work. Press Esc to stop it, or queue it: /queue ${text}\n`));
+        return;
+      }
+      print(echo(text));
+      void runCommand(text);
+      return;
+    }
+    print(echo(text));
+    schedule(() => runCommand(text));
+  };
+
+  const submit = (raw: string): void => {
+    quitHinted = false;
+    const text = raw.trim();
+    if (!text) {
+      if (pending) sendPending();
+      return;
+    }
+    if (text.startsWith('/') && !pending) return command(text);
+    if (text.startsWith('/')) {
+      // A command is not part of the waiting message; that message goes first.
+      sendPending();
+      return command(text);
+    }
+    addPending(text);
+  };
+
+  const exit = async (): Promise<void> => {
+    if (exiting) return;
+    exiting = true;
+    if (pending) clearTimeout(pending.timer);
+    pending = null;
+    busy?.controller.abort();
+    await chain.catch(() => {});
+    resolveExit();
+  };
+
+  const ticker = setInterval(() => {
+    if (!busy && !pending) return;
+    frame++;
+    footer.render();
+  }, 200);
+
+  footer.start();
+  if (initialPrompt) send(initialPrompt);
+  else setTimeout(afterIdle, 0);
+
+  await exited;
+  clearInterval(ticker);
+  stopWaking();
+  footer.stop();
   stdin.pause();
 }

@@ -69,15 +69,6 @@ export function renderMenu(items: CommandEntry[], selected: number, columns: num
   return lines;
 }
 
-/** The parts of a readline Interface the menu uses. */
-export interface MenuLine {
-  readonly line: string;
-  readonly cursor: number;
-  getCursorPos(): { rows: number; cols: number };
-  write(data: string): void;
-  write(data: null, key: { name: string; ctrl?: boolean }): void;
-}
-
 export interface MenuKey {
   name?: string;
   shift?: boolean;
@@ -85,44 +76,47 @@ export interface MenuKey {
   meta?: boolean;
 }
 
+/** What the menu needs from the line being typed. */
+export interface MenuHost {
+  readonly text: string;
+  readonly cursorAtEnd: boolean;
+  /** Replaces the whole line, with the cursor at its end. */
+  replace(text: string): void;
+  /** Sends the line, as Enter would. */
+  submit(): void;
+}
+
 /**
- * Shows matching commands under a prompt line that starts with a slash. The line stays a
- * normal readline line: the menu only takes the keys it uses while it is showing.
+ * Matching commands, listed under a prompt line that starts with a slash. It only takes the
+ * keys it uses while it is showing; the footer draws the lines it returns.
  */
 export class CommandMenu {
-  private readonly rl: MenuLine;
   private readonly entries: () => CommandEntry[];
-  private readonly write: (text: string) => void;
-  private readonly columns: () => number;
   private items: CommandEntry[] = [];
   private selected = 0;
   private query: string | null = null;
-  /** Lines drawn under the prompt, so they can be erased. */
-  private drawn = 0;
   /** The line the user closed the menu on with Esc. It stays closed until the line changes. */
   private dismissed: string | null = null;
 
-  constructor(options: { rl: MenuLine; entries: () => CommandEntry[]; write: (text: string) => void; columns: () => number }) {
-    this.rl = options.rl;
-    this.entries = options.entries;
-    this.write = options.write;
-    this.columns = options.columns;
+  constructor(entries: () => CommandEntry[]) {
+    this.entries = entries;
   }
 
   get visible(): boolean {
     return this.query !== null;
   }
 
-  /** Called before readline sees a key. True when the menu used it, so readline must not. */
-  handle(key: MenuKey | undefined): boolean {
+  /** Called before the line sees a key. True when the menu used it. */
+  handle(key: MenuKey | undefined, host: MenuHost): boolean {
     if (!this.visible || !key) return false;
     // The key decoder marks a lone Esc as meta, so check for Esc before ruling out modifiers.
     if (key.name === 'escape') {
-      this.dismissed = this.rl.line;
+      this.dismissed = host.text;
       this.close();
       return true;
     }
     if (key.ctrl || key.meta) return false;
+    const choice = this.items[this.selected];
     switch (key.name) {
       case 'up':
         this.move(-1);
@@ -132,27 +126,30 @@ export class CommandMenu {
         return true;
       case 'tab':
         if (key.shift) return false;
-        this.complete();
+        this.close();
+        if (choice) host.replace(`/${choice.name} `);
         return true;
       case 'return':
       case 'enter':
-        this.submit();
+        this.close();
+        if (choice) host.replace(`/${choice.name}`);
+        host.submit();
         return true;
       default:
         return false;
     }
   }
 
-  /** Called after readline has handled a key: opens, filters or closes the menu to match the line. */
-  update(key: MenuKey | undefined): void {
+  /** Called after the line has changed: opens, filters or closes the menu to match it. */
+  update(key: MenuKey | undefined, host: MenuHost): void {
     // Recalling history never opens the menu, so the arrows keep walking through history.
     if (key?.name === 'up' || key?.name === 'down') {
       this.close();
       return;
     }
-    const line = this.rl.line;
+    const line = host.text;
     if (line !== this.dismissed) this.dismissed = null;
-    if (!/^\/\S*$/.test(line) || this.rl.cursor !== line.length || this.dismissed !== null) {
+    if (!/^\/\S*$/.test(line) || !host.cursorAtEnd || this.dismissed !== null) {
       this.close();
       return;
     }
@@ -166,55 +163,18 @@ export class CommandMenu {
       return;
     }
     this.query = query;
-    this.draw();
   }
 
-  /** Erases the menu and leaves the cursor where it was. */
   close(): void {
     this.query = null;
-    if (this.drawn === 0) return;
-    const { cols } = this.rl.getCursorPos();
-    // The menu's rows are there to move into, so this does not scroll the screen.
-    this.write(`\n\x1b[0J\x1b[1A\x1b[${cols + 1}G`);
-    this.drawn = 0;
+  }
+
+  /** What to draw under the line, or nothing while closed. */
+  lines(columns: number): string[] {
+    return this.visible ? renderMenu(this.items, this.selected, columns) : [];
   }
 
   private move(by: number): void {
     this.selected = (this.selected + by + this.items.length) % this.items.length;
-    this.draw();
-  }
-
-  private draw(): void {
-    const { rows, cols } = this.rl.getCursorPos();
-    // A wrapped line would put the menu over part of the input. Command names are short.
-    if (rows > 0) {
-      this.close();
-      return;
-    }
-    const lines = renderMenu(this.items, this.selected, this.columns());
-    // Relative moves, because writing below the last screen row scrolls it.
-    this.write(`\n\x1b[0J${lines.join('\n')}\x1b[${lines.length}A\x1b[${cols + 1}G`);
-    this.drawn = lines.length;
-  }
-
-  private replaceLine(text: string): void {
-    this.rl.write(null, { ctrl: true, name: 'e' });
-    this.rl.write(null, { ctrl: true, name: 'u' });
-    this.rl.write(text);
-  }
-
-  /** Tab: puts the selected command on the line, ready for its arguments. */
-  private complete(): void {
-    const choice = this.items[this.selected];
-    this.close();
-    if (choice) this.replaceLine(`/${choice.name} `);
-  }
-
-  /** Enter: runs the selected command. */
-  private submit(): void {
-    const choice = this.items[this.selected];
-    this.close();
-    if (choice && this.rl.line !== `/${choice.name}`) this.replaceLine(`/${choice.name}`);
-    this.rl.write(null, { name: 'return' });
   }
 }

@@ -17,7 +17,7 @@ export const style = {
 };
 
 /** Columns a character takes. Over-counting is safe for layout; under-counting would wrap a line. */
-function charWidth(code: number): number {
+export function charWidth(code: number): number {
   if ((code >= 0x300 && code <= 0x36f) || code === 0x200d || (code >= 0xfe00 && code <= 0xfe0f)) return 0;
   const wide =
     (code >= 0x1100 && code <= 0x115f) || (code >= 0x2e80 && code <= 0xa4cf) || (code >= 0xac00 && code <= 0xd7a3) ||
