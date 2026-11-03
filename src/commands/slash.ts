@@ -92,7 +92,11 @@ const BUILTINS: Record<string, BuiltinCommand> = {
         lines.push('', 'MCP prompts:');
         for (const { command, prompt } of prompts) lines.push(`  /${command}  ${prompt.description ?? ''}`.trimEnd());
       }
-      lines.push('', 'Keys: Esc or Ctrl+C interrupts a running turn. Shift+Tab cycles the permission mode. End a line with \\ to continue it.');
+      lines.push(
+        '',
+        'Keys: Esc or Ctrl+C interrupts a running turn. Shift+Tab cycles the permission mode. End a line with \\ to continue it.',
+        'Typing / lists commands as you type: Up and Down choose, Enter runs, Tab completes, Esc closes the list.',
+      );
       return { output: lines.join('\n') };
     },
   },
@@ -515,10 +519,30 @@ const BUILTINS: Record<string, BuiltinCommand> = {
   exit: { description: 'Quit', run: () => ({ exit: true }) },
 };
 
+/** A command the user can type, for completion and the command menu. */
+export interface CommandEntry {
+  /** Without the slash. */
+  name: string;
+  description: string;
+  /** What goes after the name, such as `<file>`. */
+  hint?: string;
+}
+
+/** Built-in commands, then skills, then MCP prompts. A built-in hides a skill of the same name, as when running one. */
+export function commandEntries(runtime: Runtime): CommandEntry[] {
+  const entries: CommandEntry[] = Object.entries(BUILTINS).map(([name, command]) => ({ name, description: command.description }));
+  for (const skill of skillsOf(runtime).values()) {
+    if (skill.userInvocable) entries.push({ name: skill.name, description: skill.description, ...(skill.argumentHint ? { hint: skill.argumentHint } : {}) });
+  }
+  for (const { command, server, prompt } of runtime.mcp.prompts()) {
+    entries.push({ name: command, description: prompt.description ?? `Prompt from the ${server} MCP server` });
+  }
+  const seen = new Set<string>();
+  return entries.filter((entry) => !seen.has(entry.name) && seen.add(entry.name));
+}
+
 export function commandNames(runtime: Runtime): string[] {
-  const skills = [...skillsOf(runtime).values()].filter((skill) => skill.userInvocable).map((skill) => skill.name);
-  const prompts = runtime.mcp.prompts().map(({ command }) => command);
-  return [...new Set([...Object.keys(BUILTINS), ...skills, ...prompts])].map((name) => `/${name}`);
+  return commandEntries(runtime).map((entry) => `/${entry.name}`);
 }
 
 function skillCommand(skill: Skill, args: string, runtime: Runtime): CommandResult {

@@ -3,8 +3,9 @@ import { emitKeypressEvents } from 'node:readline';
 import { createInterface } from 'node:readline';
 import type { Key } from 'node:readline';
 import { APP_DISPLAY_NAME, VERSION } from '../config/paths.ts';
-import { commandNames, runSlashCommand, settleCommand } from '../commands/slash.ts';
-import type { CommandIO, CommandResult } from '../commands/slash.ts';
+import { commandEntries, runSlashCommand, settleCommand } from '../commands/slash.ts';
+import type { CommandEntry, CommandIO, CommandResult } from '../commands/slash.ts';
+import { CommandMenu } from './command-menu.ts';
 import type { SkillActivation } from '../skills/skills.ts';
 import type { AgentEvent } from '../core/agent.ts';
 import type { Runtime } from '../core/runtime.ts';
@@ -15,18 +16,22 @@ import { MarkdownStream, permissionPreview, sanitize, Spinner, style, toolResult
 const stdin = process.stdin;
 const stdout = process.stdout;
 
+type KeyListener = (text: string | undefined, key: Key | undefined) => void;
+
 /** Everything that reads a line from the keyboard goes through one short-lived readline. */
 class LineInput {
   private history: string[] = [];
-  private completions: () => string[] = () => [];
+  private commands: () => CommandEntry[] = () => [];
   onShiftTab: (() => void) | undefined;
 
-  setCompletions(provider: () => string[]): void {
-    this.completions = provider;
+  setCommands(provider: () => CommandEntry[]): void {
+    this.commands = provider;
   }
 
-  read(prompt: string, options: { history?: boolean; signal?: AbortSignal } = {}): Promise<string | null> {
+  /** `commands` shows the command menu while the line starts with a slash. */
+  read(prompt: string, options: { history?: boolean; commands?: boolean; signal?: AbortSignal } = {}): Promise<string | null> {
     return new Promise((resolve) => {
+      const before = stdin.listeners('keypress');
       const rl = createInterface({
         input: stdin,
         output: stdout,
@@ -36,26 +41,41 @@ class LineInput {
         removeHistoryDuplicates: true,
         completer: (line: string): [string[], string] => {
           if (!line.startsWith('/')) return [[], line];
-          return [this.completions().filter((name) => name.startsWith(line)), line];
+          return [this.commands().map((entry) => `/${entry.name}`).filter((name) => name.startsWith(line)), line];
         },
       });
+      // Readline reads keys through a keypress listener of its own. Calling it from here lets
+      // the command menu see each key first and keep the ones it uses away from readline.
+      const readlineKeys = stdin.listeners('keypress').filter((listener) => !before.includes(listener)) as KeyListener[];
+      for (const listener of readlineKeys) stdin.off('keypress', listener);
+      const menu = options.commands && stdout.isTTY
+        ? new CommandMenu({ rl, entries: this.commands, write: (text) => stdout.write(text), columns: () => stdout.columns || 80 })
+        : null;
       if (options.history) rl.on('history', (updated: string[]) => (this.history = updated));
       let settled = false;
       // A wake (background work finishing, a scheduled prompt) closes the prompt so it can be handled.
       const onWakeAbort = (): void => finish(null);
       options.signal?.addEventListener('abort', onWakeAbort, { once: true });
-      const onKey = (_text: string | undefined, key: Key | undefined): void => {
-        if (key?.name === 'tab' && key.shift && this.onShiftTab) {
+      const onKey: KeyListener = (text, key) => {
+        if (key?.name === 'tab' && key.shift) {
+          // Not passed on: readline takes it for Tab and would complete the line.
+          if (!this.onShiftTab) return;
           this.onShiftTab();
           rl.setPrompt(promptProvider());
           rl.prompt(true);
+          menu?.update(key);
+          return;
         }
+        if (menu?.handle(key)) return;
+        for (const listener of readlineKeys) listener.call(stdin, text, key);
+        if (!settled) menu?.update(key);
       };
       const promptProvider = (): string => (options.history ? this.currentPrompt() : prompt);
       stdin.on('keypress', onKey);
       const finish = (value: string | null): void => {
         if (settled) return;
         settled = true;
+        menu?.close();
         stdin.off('keypress', onKey);
         options.signal?.removeEventListener('abort', onWakeAbort);
         rl.close();
@@ -226,7 +246,7 @@ export async function runRepl(
 ): Promise<void> {
   emitKeypressEvents(stdin);
   const { input, prompter } = terminal;
-  input.setCompletions(() => commandNames(runtime));
+  input.setCommands(() => commandEntries(runtime));
   const promptText = (): string => {
     const mode = runtime.engine.mode;
     return `${mode === 'default' ? '' : style.yellow(`[${mode}] `)}${style.cyan('>')} `;
@@ -311,7 +331,7 @@ export async function runRepl(
     await drainWakes();
     const wake = new AbortController();
     const stopWaking = runtime.wakes.onWake(() => wake.abort());
-    let line = await input.read(promptText(), { history: true, signal: wake.signal });
+    let line = await input.read(promptText(), { history: true, commands: true, signal: wake.signal });
     stopWaking();
     // A null line means end-of-input, unless a wake closed the prompt so we can handle it.
     if (line === null && runtime.wakes.pending()) continue;
