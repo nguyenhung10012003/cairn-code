@@ -23,8 +23,12 @@ const FACTORIES: Record<string, (config: ProviderConfig) => ModelProvider> = {
   ollama: (config) => new OllamaProvider(config),
   scripted: () => {
     const script = process.env.CAIRN_SCRIPT;
-    if (!script) throw new ProviderNotConfiguredError('The scripted provider needs CAIRN_SCRIPT set to a JSON file of responses.');
-    return ScriptedProvider.fromFile(script);
+    if (!script) return ScriptedProvider.demo();
+    try {
+      return ScriptedProvider.fromFile(script);
+    } catch (error) {
+      throw new ProviderNotConfiguredError(`CAIRN_SCRIPT ${script}: ${(error as Error).message}`);
+    }
   },
 };
 

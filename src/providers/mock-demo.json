@@ -1,0 +1,155 @@
+{
+  "rules": [
+    {
+      "match": "<task-notification>",
+      "steps": [{ "text": "(mock) A background task reported back:\n\n{{prompt}}" }]
+    },
+    {
+      "regex": "^(help|\\?)$",
+      "steps": [
+        {
+          "text": "(mock) This is the built-in mock provider. No model is called: each reply comes from a rule that matches what you type.\n\n- `run <command>`: Bash runs the command\n- `read <file>`: Read shows the file\n- `find <pattern>`: Glob lists matching files, such as `find **/*.ts`\n- `grep <regex>`: Grep searches file contents\n- `demo edit`: Write and then Edit a file named mock-demo.txt\n- `demo todo`: a TodoWrite checklist\n- `demo ask`: AskUserQuestion with two options\n- `demo agent`: a subagent that lists files\n- `demo think`: a thinking block before the answer\n- `demo slow`: a 5-second wait, so you can press Esc\n- `demo error`: an API error\n\nTo write your own rules, see \"Mock provider\" in the README."
+        }
+      ]
+    },
+    {
+      "regex": "^run (.+)$",
+      "steps": [
+        { "toolCalls": [{ "name": "Bash", "input": { "command": "{{1}}", "description": "Run the command from the mock prompt" } }] },
+        { "text": "(mock) The command returned:\n\n```\n{{result}}\n```" }
+      ]
+    },
+    {
+      "regex": "^read (.+)$",
+      "steps": [
+        { "toolCalls": [{ "name": "Read", "input": { "file_path": "{{1}}" } }] },
+        { "text": "(mock) Read returned:\n\n```\n{{result}}\n```" }
+      ]
+    },
+    {
+      "regex": "^find (.+)$",
+      "steps": [
+        { "toolCalls": [{ "name": "Glob", "input": { "pattern": "{{1}}" } }] },
+        { "text": "(mock) Matching files:\n\n```\n{{result}}\n```" }
+      ]
+    },
+    {
+      "regex": "^grep (.+)$",
+      "steps": [
+        { "toolCalls": [{ "name": "Grep", "input": { "pattern": "{{1}}", "output_mode": "content" } }] },
+        { "text": "(mock) Matching lines:\n\n```\n{{result}}\n```" }
+      ]
+    },
+    {
+      "match": "demo edit",
+      "steps": [
+        {
+          "text": "(mock) I'll check whether mock-demo.txt exists, write it, then change one word.",
+          "toolCalls": [{ "name": "Read", "input": { "file_path": "mock-demo.txt" } }]
+        },
+        { "toolCalls": [{ "name": "Write", "input": { "file_path": "mock-demo.txt", "content": "Hello from the mock provider.\nThis line stays the same.\n" } }] },
+        { "toolCalls": [{ "name": "Edit", "input": { "file_path": "mock-demo.txt", "old_string": "Hello", "new_string": "Goodbye" } }] },
+        { "text": "(mock) mock-demo.txt now starts with \"Goodbye\". `/rewind` undoes the change." }
+      ]
+    },
+    {
+      "match": "demo todo",
+      "steps": [
+        {
+          "toolCalls": [
+            {
+              "name": "TodoWrite",
+              "input": {
+                "todos": [
+                  { "content": "Read the code", "status": "completed" },
+                  { "content": "Make the change", "status": "in_progress" },
+                  { "content": "Run the tests", "status": "pending" }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "toolCalls": [
+            {
+              "name": "TodoWrite",
+              "input": {
+                "todos": [
+                  { "content": "Read the code", "status": "completed" },
+                  { "content": "Make the change", "status": "completed" },
+                  { "content": "Run the tests", "status": "completed" }
+                ]
+              }
+            }
+          ]
+        },
+        { "text": "(mock) All three items are done. `/todos` lists them." }
+      ]
+    },
+    {
+      "match": "demo ask",
+      "steps": [
+        {
+          "toolCalls": [
+            {
+              "name": "AskUserQuestion",
+              "input": {
+                "questions": [
+                  {
+                    "question": "Which color should the mock button be?",
+                    "header": "Color",
+                    "options": [
+                      { "label": "Blue (Recommended)", "description": "Matches the rest of the mock page." },
+                      { "label": "Green", "description": "Stands out more." }
+                    ],
+                    "multiSelect": false
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        { "text": "(mock) The tool returned:\n\n{{result}}" }
+      ]
+    },
+    {
+      "match": "[mock-subagent]",
+      "steps": [
+        { "toolCalls": [{ "name": "Glob", "input": { "pattern": "*" } }] },
+        { "text": "(mock subagent) Files at the top level:\n{{result}}" }
+      ]
+    },
+    {
+      "match": "demo agent",
+      "steps": [
+        {
+          "toolCalls": [
+            {
+              "name": "Agent",
+              "input": { "description": "List top-level files", "prompt": "[mock-subagent] List the files at the top of the working directory." }
+            }
+          ]
+        },
+        { "text": "(mock) The Agent tool returned:\n\n{{result}}" }
+      ]
+    },
+    {
+      "match": "demo think",
+      "steps": [
+        {
+          "thinking": "(mock) The user wants to see a thinking block, so this text shows how the UI displays one.",
+          "text": "(mock) The thinking came before this answer."
+        }
+      ]
+    },
+    {
+      "match": "demo slow",
+      "steps": [{ "delayMs": 5000, "text": "(mock) Answered after 5 seconds." }]
+    },
+    {
+      "match": "demo error",
+      "steps": [{ "error": "(mock) The API returned an error.", "errorStatus": 500 }]
+    }
+  ],
+  "fallback": { "text": "(mock) No rule matches \"{{prompt}}\". Type `help` to see what this mock can do." }
+}

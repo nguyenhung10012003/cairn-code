@@ -81,3 +81,5 @@ jobs:
           reply=$(cairn --provider scripted -p go --dangerously-skip-permissions < /dev/null)
           test "$reply" = "done"
           test "$(cat out.txt)" = "smoke"
+          # Without CAIRN_SCRIPT, the built-in mock rules answer, so they must be in the bundle.
+          CAIRN_SCRIPT='' cairn --provider scripted -p 'run echo built-in rules' --dangerously-skip-permissions < /dev/null | grep -q 'built-in rules'

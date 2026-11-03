@@ -322,17 +322,46 @@ The regular tests run the real SDK against a fake server, so they cost nothing, 
 ANTHROPIC_API_KEY=... bun run test:live
 ```
 
-### Trying the UI without an API
+### Mock provider
+
+`--provider scripted` replies from a script instead of a model, so you can use Cairn as an end user without an API key: approve or deny tool calls, answer questions, watch subagents, interrupt, `/rewind`, `/compact`. Run it in a scratch directory, because the tool calls are real.
 
 ```sh
-cat > /tmp/script.json <<'EOF'
-[
-  { "toolCalls": [{ "name": "Bash", "input": { "command": "mkdir -p demo && ls" } }] },
-  { "text": "Created **demo**." }
-]
-EOF
-CAIRN_SCRIPT=/tmp/script.json bun run start --provider scripted
+mkdir -p /tmp/play && cd /tmp/play
+cairn --provider scripted       # from source: bun run start --provider scripted
 ```
+
+With no `CAIRN_SCRIPT`, it uses the built-in rules in `src/providers/mock-demo.json`. Type `help` to list them: `run <command>`, `read <file>`, `find <pattern>`, `grep <regex>`, and `demo edit`, `demo todo`, `demo ask`, `demo agent`, `demo think`, `demo slow` and `demo error`.
+
+**Your own rules.** Set `CAIRN_SCRIPT` to a JSON file:
+
+```json
+{
+  "rules": [
+    {
+      "regex": "^deploy (\\w+)$",
+      "steps": [
+        { "text": "Deploying {{1}}.", "toolCalls": [{ "name": "Bash", "input": { "command": "echo deployed {{1}}" } }] },
+        { "text": "Done: {{result}}" }
+      ]
+    },
+    { "match": "hello", "steps": [{ "text": "Hi! You said: {{prompt}}" }] }
+  ],
+  "fallback": { "text": "Unknown command: {{prompt}}" }
+}
+```
+
+```sh
+CAIRN_SCRIPT=./rules.json cairn --provider scripted
+```
+
+- **Matching:** the first rule that matches what you typed answers it. `match` looks for the text anywhere, ignoring case; `regex` is a JavaScript regular expression, also ignoring case. A subagent's prompt is matched the same way, and so is a `<task-notification>` that arrives when background work finishes.
+- **Steps:** the first step answers the prompt. Each later step answers the tool results of the step before it. A step with `toolCalls` continues the turn; one without ends it. When a rule runs out of steps, the turn ends.
+- **Placeholders**, in any string of a step: `{{prompt}}` is what you typed, `{{1}}`, `{{2}}`… are the regex groups, and `{{result}}` is the output of the previous step's tools, up to 2,000 characters.
+- **A step** can also have `thinking`, `delayMs` (wait first, so you can press Esc), `error` with `errorStatus` (fail like the API would), `stopReason` and `usage`. Tool inputs use the same fields as the real tools, such as `file_path`, `command` or `pattern`.
+- **Cairn's own requests** get fixed replies and do not use your rules: session titles and `/rename`, `/btw`, and the summary for `/compact`.
+
+A JSON array instead of `{ "rules": … }` is played in order, one item per request, whatever you type. The tests use that form.
 
 ## Configuration
 

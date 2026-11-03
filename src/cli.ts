@@ -40,7 +40,8 @@ Options:
       --no-session-persistence      Do not save this session to disk
       --model <name>                Model for this session
       --effort <level>              low, medium, high, xhigh or max
-      --provider <name>             Which model API to use: anthropic (default), openai, ollama
+      --provider <name>             Which model API to use: anthropic (default), openai, ollama,
+                                    or scripted for mock replies without an API (type "help")
       --permission-mode <mode>      ${PERMISSION_MODES.join(', ')}
       --dangerously-skip-permissions  Same as --permission-mode bypassPermissions
       --allow-dangerously-skip-permissions
