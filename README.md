@@ -38,21 +38,30 @@ Requires [Bun](https://bun.sh) 1.3 or later.
 bun install
 bun test --timeout 60000
 bun run start                  # run straight from TypeScript
-bun run build:npm && npm link  # build dist/cli.js, the Node bundle npm ships, and link the `cairn` command
+bun run build:npm && npm link  # build dist/npm/, the package npm ships, and link the `cairn` command
 bun run build                  # or build dist/cairn, a single executable with Bun inside
 ```
 
-**From source, use `bun run start` or a build in repositories you do not trust.** Plain `bun` reads `.env` and `bunfig.toml` from the current directory, so a repository could change `ANTHROPIC_BASE_URL` to capture your key, or run code through `preload` before any trust check. `dist/cairn`, `bun run start` and the shebang in `src/cli.ts` all turn both of these off; typing `bun src/cli.ts` by hand does not. Node reads neither file, so `dist/cli.js` is not affected.
+**From source, use `bun run start` or a build in repositories you do not trust.** Plain `bun` reads `.env` and `bunfig.toml` from the current directory, so a repository could change `ANTHROPIC_BASE_URL` to capture your key, or run code through `preload` before any trust check. `dist/cairn`, `bun run start` and the shebang in `src/cli.ts` all turn both of these off; typing `bun src/cli.ts` by hand does not. Node reads neither file, so `dist/npm/cli.js` is not affected.
 
 ### Publishing to npm
 
+What npm receives is the directory `dist/npm/`, which `bun run build:npm` writes from scratch each time:
+
+- `cli.js`, the Node bundle;
+- `package.json`, with only the fields an install needs: no scripts and no development dependencies;
+- `README.md`, a copy of `README.npm.md`.
+
+`README.npm.md` is the page people see on npm, so it is written for installing and using Cairn. This file is for working on Cairn. The `package.json` in the repository is marked private, so a plain `npm publish` here fails instead of uploading the wrong thing.
+
 ```sh
-npm pack --dry-run             # lists what would be uploaded: dist/cli.js, README.md, package.json
+bun run build:npm && npm pack ./dist/npm --dry-run   # what would be uploaded
 npm login
-npm publish                    # runs typecheck, the tests and build:npm first
+bun run release                # typecheck, tests, build:npm, then npm publish ./dist/npm
+bun run release:stage          # the same, but staged: approve it with 2FA via `npm stage approve <id>` or on npmjs.com
 ```
 
-`build:npm` stops if the version in `package.json` differs from `VERSION` in `src/config/paths.ts`, so change both together.
+npm never accepts the same version twice, so raise the version for each release. `build:npm` stops if the version in `package.json` differs from `VERSION` in `src/config/paths.ts`, so change both together.
 
 ## Usage
 
@@ -497,7 +506,8 @@ src/hooks/            Running hooks
 src/session/          Transcripts, checkpoints and worktrees
 src/commands/         Slash commands, `doctor` and `purge`
 src/ui/               REPL and print mode
-scripts/build-npm.ts  Builds dist/cli.js for the npm package
+scripts/build-npm.ts  Builds dist/npm/, the directory published to npm
+README.npm.md         The README shown on npm
 ```
 
 Rename the product in `src/config/paths.ts`.

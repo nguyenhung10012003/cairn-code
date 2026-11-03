@@ -57,15 +57,23 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: bun install --frozen-lockfile
 
-      - name: Pack
-        # prepack runs build:npm, which writes dist/cli.js.
-        run: npm pack --pack-destination "$RUNNER_TEMP"
-
-      - name: Check the tarball holds only the bundle, README and manifest
+      - name: Build and pack dist/npm, the directory that is published
         run: |
-          files=$(tar -tzf "$RUNNER_TEMP"/cairn-code-*.tgz | sort | tr '\n' ' ')
+          bun run build:npm
+          npm pack ./dist/npm --pack-destination "$RUNNER_TEMP"
+
+      - name: Check the tarball holds only the bundle, the npm README and a manifest without scripts
+        run: |
+          tarball=$(ls "$RUNNER_TEMP"/cairn-code-*.tgz)
+          files=$(tar -tzf "$tarball" | sort | tr '\n' ' ')
           echo "$files"
-          test "$files" = "package/README.md package/dist/cli.js package/package.json "
+          test "$files" = "package/README.md package/cli.js package/package.json "
+          tar -xOzf "$tarball" package/README.md | cmp - README.npm.md
+          tar -xOzf "$tarball" package/package.json | node -e '
+            const m = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            for (const field of ["private", "scripts", "devDependencies"]) if (field in m) throw new Error("published manifest has " + field);
+            if (m.bin?.cairn !== "cli.js") throw new Error("bin.cairn should be cli.js");
+          '
 
       - name: Install globally
         run: npm install -g "$RUNNER_TEMP"/cairn-code-*.tgz
