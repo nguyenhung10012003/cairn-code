@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tgz
+*.log
+.env
+.env.*
+.cairn/settings.local.json
+CAIRN.local.md
+docs/
+.backup/
+.vscode/
+.DS_Store
