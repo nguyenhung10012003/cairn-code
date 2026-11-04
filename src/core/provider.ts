@@ -49,6 +49,8 @@ export type StreamEvent =
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_use_start'; id: string; name: string }
   | { type: 'server_tool'; name: string; summary?: string }
+  /** The response failed and is sent again after `delayMs`. Whatever streamed before this is void. */
+  | { type: 'retry'; attempt: number; maxRetries: number; delayMs: number; reason: string }
   | {
       type: 'message_end';
       content: ContentBlock[];
@@ -92,6 +94,7 @@ export interface ProviderConfig {
   apiKeyEnv?: string;
   /** Use API extras even through a custom baseUrl. Set this only if the upstream is the real API. */
   fullApiFeatures?: boolean;
+  /** Retries for one response, before it starts or partway through. Default 10. */
   maxRetries?: number;
   /** Tokens of context, for models the provider does not know. Ollama also loads the model with this many. */
   contextWindow?: number;
@@ -110,11 +113,14 @@ export interface ProviderInit extends ProviderConfig {
 export class ProviderError extends Error {
   readonly retryable: boolean;
   readonly status?: number;
+  /** How long the server asked to wait before trying again. Set by whoever read its headers. */
+  retryAfterMs?: number;
 
-  constructor(message: string, options: { retryable?: boolean; status?: number; cause?: unknown } = {}) {
+  constructor(message: string, options: { retryable?: boolean; status?: number; cause?: unknown; retryAfterMs?: number } = {}) {
     super(message, { cause: options.cause });
     this.name = 'ProviderError';
     this.retryable = options.retryable ?? false;
     if (options.status !== undefined) this.status = options.status;
+    if (options.retryAfterMs !== undefined) this.retryAfterMs = options.retryAfterMs;
   }
 }

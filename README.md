@@ -144,7 +144,7 @@ Without `--type`, `add` asks for the type, then for the base URL, the key and th
 | `baseUrl` | Where its API is. For `anthropic`, `ANTHROPIC_BASE_URL` does the same |
 | `apiKeyEnv` | Read the key from this variable |
 | `fullApiFeatures` | `anthropic`: use the API extras even through a `baseUrl`. Set this only if the upstream really is the API |
-| `maxRetries` | Retries on 429, 5xx and connection errors. Default 4 (Ollama: 1) |
+| `maxRetries` | Retries on 429, 5xx, connection errors and a stream that fails partway, which starts the response over. Each wait doubles from 0.5s, or is what the server asks for, and is never more than 5 minutes. Default 10 |
 | `contextWindow` | Tokens of context. Ollama loads the model with exactly this many; for other providers it sets when to compact for a model they do not know |
 | `maxOutputTokens` | `openai-chat`: the most tokens to ask for in a response. Unset, the server decides |
 
@@ -195,7 +195,7 @@ Cairn uses Ollama's native `/api/chat` API, not its OpenAI-compatible endpoint, 
 
 The Agent tool's `model` parameter takes `opus`, `sonnet`, `haiku` or `fable`. Each provider maps these its own way: on Anthropic, the newest Claude model of each line; on OpenAI, `gpt-6-astra` (`opus`, `fable`), `gpt-6.1-sol` (`sonnet`) and `gpt-6-luna` (`haiku`). A provider with no mapping, such as Ollama, uses the main session's model. Automatic session titles use the provider's `haiku` model when it has one.
 
-**Supporting another API:** a server that speaks one of the four APIs above needs only `cairn provider add`. For a different API, write a class implementing `ModelProvider` in `src/providers/`, translating between that API's format and the neutral types in `src/core/messages.ts`. Then add an entry to `PROVIDER_TYPES` in `src/providers/index.ts` that says how to create it, where its requests go, and which variables hold its key. `src/providers/http.ts` has retries and readers for SSE and NDJSON. The agent loop, tools, UI and `cairn provider` need no changes.
+**Supporting another API:** a server that speaks one of the four APIs above needs only `cairn provider add`. For a different API, write a class implementing `ModelProvider` in `src/providers/`, translating between that API's format and the neutral types in `src/core/messages.ts`. Then add an entry to `PROVIDER_TYPES` in `src/providers/index.ts` that says how to create it, where its requests go, and which variables hold its key. `src/providers/http.ts` has a JSON POST and readers for SSE and NDJSON, and `src/providers/retry.ts` has `withRetries`, which retries a whole response on a `ProviderError` marked `retryable`. The agent loop, tools, UI and `cairn provider` need no changes.
 
 ### API features in use (Anthropic)
 

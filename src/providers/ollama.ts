@@ -12,14 +12,13 @@ import { emptyUsage } from '../core/messages.ts';
 import { ProviderError } from '../core/provider.ts';
 import type { Effort, ModelProvider, ProviderInit, ProviderRequest, StreamEvent } from '../core/provider.ts';
 import { errorMessage, jsonLines, postJson } from './http.ts';
+import { DEFAULT_MAX_RETRIES, withRetries } from './retry.ts';
 
 const PROVIDER_ID = 'ollama';
 const DEFAULT_MODEL = 'qwen3-coder:30b';
 const DEFAULT_HOST = 'http://localhost:11434';
 /** Cairn's system prompt and tool definitions alone take a large part of a small window. */
 const DEFAULT_CONTEXT_WINDOW = 65_536;
-/** A local server that is not running will not start in the next few seconds. */
-const DEFAULT_MAX_RETRIES = 1;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
 
 type Json = Record<string, unknown>;
@@ -193,7 +192,11 @@ export class OllamaProvider implements ModelProvider {
     return [THINK_LEVELS[effort], true, undefined];
   }
 
-  async *stream(request: ProviderRequest): AsyncGenerator<StreamEvent> {
+  stream(request: ProviderRequest): AsyncGenerator<StreamEvent> {
+    return withRetries(this.maxRetries, request.signal, () => this.attempt(request));
+  }
+
+  private async *attempt(request: ProviderRequest): AsyncGenerator<StreamEvent> {
     const key = process.env[this.keyVar] || this.storedKey;
     const candidates = this.thinkCandidates(request.model, request.effort);
     let response: Response | undefined;
@@ -203,10 +206,12 @@ export class OllamaProvider implements ModelProvider {
           headers: key ? { authorization: `Bearer ${key}` } : {},
           body: buildOllamaRequest(request, { contextWindow: this.window, think }),
           ...(request.signal ? { signal: request.signal } : {}),
-          maxRetries: this.maxRetries,
           describeError: (status, body) => this.describeError(status, body, request.model),
           describeNetworkError: (error) =>
-            new ProviderError(`Could not reach Ollama at ${this.host} (${error.message.replace(/[.?!\s]+$/, '')}). Start it with \`ollama serve\`, or set providers.ollama.baseUrl.`, { cause: error }),
+            new ProviderError(`Could not reach Ollama at ${this.host} (${error.message.replace(/[.?!\s]+$/, '')}). Start it with \`ollama serve\`, or set providers.ollama.baseUrl.`, {
+              retryable: true,
+              cause: error,
+            }),
         });
         if (index > 0) this.thinkFallback.set(request.model, think);
         break;
@@ -261,6 +266,6 @@ export class OllamaProvider implements ModelProvider {
         return;
       }
     }
-    throw new ProviderError('Ollama stopped streaming before the response finished.');
+    throw new ProviderError('Ollama stopped streaming before the response finished.', { retryable: true });
   }
 }

@@ -8,14 +8,16 @@ import { ProviderError } from '../core/provider.ts';
 import type { ModelProvider, ProviderConfig, ProviderInit, ProviderRequest, ServerTool, StreamEvent } from '../core/provider.ts';
 import { estimateCostUsd, knownModelIds, modelSpec } from './anthropic-models.ts';
 import type { AttemptUsage } from './anthropic-models.ts';
+import { DEFAULT_MAX_RETRIES, retryAfterMs, withRetries } from './retry.ts';
 
 const PROVIDER_ID = 'anthropic';
 const DEFAULT_MODEL = 'claude-opus-5-5';
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_EFFORT = 'medium';
-const DEFAULT_MAX_RETRIES = 4;
 const WEB_SEARCH_MAX_USES_PER_REQUEST = 5;
 const MAX_BAD_TOOL_JSON_RETRIES = 2;
+/** Error types the API can send partway through a stream that a later request may not hit. */
+const TRANSIENT_ERROR_TYPES = new Set(['api_error', 'overloaded_error', 'rate_limit_error', 'timeout_error']);
 
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 const THINKING_BINDING_BETA = 'thinking-binding-controls-2026-08-01';
@@ -256,6 +258,14 @@ function historyMismatchNotices(message: ApiMessage): string[] {
   return [`The API dropped ${mismatched.length} earlier reasoning block(s) because the conversation prefix changed. This is harmless but raises cost; it usually follows resuming with different tools.`];
 }
 
+/** What the SDK would retry, were it left to: the server's `x-should-retry` first, then the status. */
+function retryableResponse(error: InstanceType<typeof Anthropic.APIError>): boolean {
+  const header = error.headers?.get('x-should-retry');
+  if (header === 'true' || header === 'false') return header === 'true';
+  const status = error.status ?? 0;
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
 /** Turns SDK failures into messages that say what to do, and never into a stack trace. */
 export function translateError(error: unknown, credentialHint: string): unknown {
   if (error instanceof Anthropic.APIUserAbortError) return error;
@@ -265,9 +275,19 @@ export function translateError(error: unknown, credentialHint: string): unknown 
   if (error instanceof Anthropic.APIConnectionError) {
     return new ProviderError(`Could not reach the Anthropic API: ${error.message}`, { retryable: true, cause: error });
   }
+  if (error instanceof Anthropic.APIError && error.status === undefined) {
+    // An `error` event in a stream that had already started, such as an overload.
+    const detail = (error.error as { error?: { message?: unknown } } | undefined)?.error?.message;
+    return new ProviderError(`The API reported an error during the response: ${typeof detail === 'string' ? detail : error.message}`, {
+      retryable: TRANSIENT_ERROR_TYPES.has(error.type ?? ''),
+      cause: error,
+    });
+  }
   if (error instanceof Anthropic.APIError) {
     const status = error.status ?? 0;
     const options = { status, cause: error };
+    const wait = retryAfterMs(error.headers);
+    const transient = { ...options, retryable: retryableResponse(error), ...(wait === undefined ? {} : { retryAfterMs: wait }) };
     if (error instanceof Anthropic.AuthenticationError) {
       return new ProviderError(`The API rejected these credentials. Check ${credentialHint}.`, options);
     }
@@ -281,15 +301,24 @@ export function translateError(error: unknown, credentialHint: string): unknown 
       return new ProviderError(`The API could not find that resource. Check the model name with /model. ${error.message}`, options);
     }
     if (error instanceof Anthropic.RateLimitError) {
-      return new ProviderError('Rate limited by the API, even after retrying. Wait a little and send the message again.', { ...options, retryable: true });
+      return new ProviderError('Rate limited by the API. Wait a little and send the message again.', transient);
     }
     if (status >= 500) {
-      return new ProviderError(`The API is having trouble (HTTP ${status}), even after retrying. Send the message again shortly.`, { ...options, retryable: true });
+      return new ProviderError(`The API is having trouble (HTTP ${status}). Send the message again shortly.`, transient);
     }
-    return new ProviderError(`The API rejected the request (HTTP ${status}): ${error.message}`, options);
+    return new ProviderError(`The API rejected the request (HTTP ${status}): ${error.message}`, transient);
   }
   if (error instanceof Anthropic.AnthropicError && /Could not resolve authentication/.test(error.message)) {
     return new ProviderError(`No API credentials found. Set ${credentialHint}.`, { cause: error });
+  }
+  // The SDK wraps a failure to read a started stream, such as a dropped connection, keeping its cause.
+  if (error instanceof Anthropic.AnthropicError && error.cause instanceof Error) {
+    return new ProviderError(`The connection to the Anthropic API dropped during the response: ${error.message}`, { retryable: true, cause: error });
+  }
+  // A stream that ended cleanly but early (no chunks, or no `message_stop`), or one spliced onto
+  // another: Bun's fetch resends a request whose reused connection dies, and appends the new body.
+  if (error instanceof Anthropic.AnthropicError && /request ended without sending any chunks|stream ended without producing a Message|Unexpected event order/.test(error.message)) {
+    return new ProviderError('The Anthropic API stream ended before the response finished.', { retryable: true, cause: error });
   }
   return error;
 }
@@ -324,6 +353,7 @@ export class AnthropicProvider implements ModelProvider {
   private readonly credentialHint: string;
   private readonly hasStoredKey: boolean;
   private readonly configuredWindow: number | undefined;
+  private readonly maxRetries: number;
 
   constructor(config: ProviderInit = {}) {
     this.name = config.name ?? PROVIDER_ID;
@@ -340,8 +370,10 @@ export class AnthropicProvider implements ModelProvider {
     const standardKeySet = !config.apiKeyEnv && Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
     const key = envKey || (standardKeySet ? undefined : config.storedKey);
     this.hasStoredKey = Boolean(config.storedKey);
+    this.maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.client = new Anthropic({
-      maxRetries: config.maxRetries ?? DEFAULT_MAX_RETRIES,
+      // Retries happen in withRetries, which also covers a stream that fails partway and waits longer.
+      maxRetries: 0,
       ...(config.baseUrl ? { baseURL: config.baseUrl } : {}),
       ...(key ? { apiKey: key } : {}),
     });
@@ -361,10 +393,19 @@ export class AnthropicProvider implements ModelProvider {
     return knownModelIds();
   }
 
-  async *stream(request: ProviderRequest): AsyncGenerator<StreamEvent> {
+  stream(request: ProviderRequest): AsyncGenerator<StreamEvent> {
     const params = buildParams(request, this.fullApiFeatures);
+    return withRetries(this.maxRetries, request.signal, () => this.attempt(params, request));
+  }
+
+  private async *attempt(params: ApiParams, request: ProviderRequest): AsyncGenerator<StreamEvent> {
+    let refreshToken = false;
     for (let attempt = 0; ; attempt++) {
-      const stream = this.client.beta.messages.stream(params, request.signal ? { signal: request.signal } : {});
+      const stream = this.client.beta.messages.stream(params, {
+        ...(request.signal ? { signal: request.signal } : {}),
+        // Only a retry inside the SDK can refresh an `ant auth login` token that a 401 says is stale.
+        ...(refreshToken ? { maxRetries: 1 } : {}),
+      });
       try {
         for await (const event of stream) {
           if (event.type === 'content_block_delta') {
@@ -387,6 +428,11 @@ export class AnthropicProvider implements ModelProvider {
       } catch (error) {
         // The tool call never completed, so there is no id to answer: the turn is sent again.
         if (isBadToolJson(error) && attempt < MAX_BAD_TOOL_JSON_RETRIES) continue;
+        if (error instanceof Anthropic.AuthenticationError && !refreshToken && this.client.apiKey == null) {
+          refreshToken = true;
+          attempt--;
+          continue;
+        }
         throw translateError(error, this.credentialHint);
       }
     }

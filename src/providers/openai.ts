@@ -9,13 +9,15 @@ import { emptyUsage } from '../core/messages.ts';
 import { ProviderError } from '../core/provider.ts';
 import type { ModelProvider, ProviderConfig, ProviderInit, ProviderRequest, StreamEvent } from '../core/provider.ts';
 import { errorMessage, postJson, serverSentEvents } from './http.ts';
+import { DEFAULT_MAX_RETRIES, withRetries } from './retry.ts';
 
 const PROVIDER_ID = 'openai';
 const DEFAULT_MODEL = 'gpt-6-astra';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_CONTEXT_WINDOW = 200_000;
-const DEFAULT_MAX_RETRIES = 4;
 const MAX_BAD_TOOL_JSON_RETRIES = 2;
+/** Failure codes in the stream that a later request may not hit. */
+const TRANSIENT_CODES = new Set(['server_error', 'rate_limit_exceeded']);
 /** Above this many input tokens a request is billed at long-context rates. */
 const LONG_PROMPT_THRESHOLD = 272_000;
 
@@ -293,13 +295,17 @@ export class OpenAIProvider implements ModelProvider {
     if (status === 404) return new ProviderError(`OpenAI could not find that model or endpoint. Check the model name with /model. ${message}`, options);
     if (status === 429) {
       if (/quota|billing|credit/i.test(body)) return new ProviderError(`The OpenAI account has run out of quota or credit: ${message}`, options);
-      return new ProviderError('Rate limited by OpenAI, even after retrying. Wait a little and send the message again.', { ...options, retryable: true });
+      return new ProviderError('Rate limited by OpenAI. Wait a little and send the message again.', { ...options, retryable: true });
     }
-    if (status >= 500) return new ProviderError(`OpenAI is having trouble (HTTP ${status}), even after retrying. Send the message again shortly.`, { ...options, retryable: true });
+    if (status >= 500) return new ProviderError(`OpenAI is having trouble (HTTP ${status}). Send the message again shortly.`, { ...options, retryable: true });
     return new ProviderError(`OpenAI rejected the request (HTTP ${status}): ${message}`, { ...options, retryable: status === 408 || status === 409 });
   }
 
-  async *stream(request: ProviderRequest): AsyncGenerator<StreamEvent> {
+  stream(request: ProviderRequest): AsyncGenerator<StreamEvent> {
+    return withRetries(this.maxRetries, request.signal, () => this.attempt(request));
+  }
+
+  private async *attempt(request: ProviderRequest): AsyncGenerator<StreamEvent> {
     for (let attempt = 0; ; attempt++) {
       const reasoning = !this.withoutReasoning.has(request.model);
       let response: Response;
@@ -308,7 +314,6 @@ export class OpenAIProvider implements ModelProvider {
           headers: this.headers(),
           body: buildOpenAIRequest(request, { reasoning }),
           ...(request.signal ? { signal: request.signal } : {}),
-          maxRetries: this.maxRetries,
           describeError: (status, body) => this.describeError(status, body),
           describeNetworkError: (error) => new ProviderError(`Could not reach OpenAI at ${this.baseUrl}: ${error.message}`, { retryable: true, cause: error }),
         });
@@ -382,13 +387,15 @@ export class OpenAIProvider implements ModelProvider {
         case 'response.failed': {
           const failure = (event.response as { error?: { code?: string; message?: string } | null } | undefined)?.error;
           throw new ProviderError(`OpenAI could not complete the response: ${failure?.message ?? failure?.code ?? 'no details given'}`, {
-            retryable: failure?.code === 'server_error' || failure?.code === 'rate_limit_exceeded',
+            retryable: TRANSIENT_CODES.has(String(failure?.code)),
           });
         }
         case 'error':
-          throw new ProviderError(`OpenAI reported an error during the response: ${String(event.message ?? event.code ?? 'no details given')}`);
+          throw new ProviderError(`OpenAI reported an error during the response: ${String(event.message ?? event.code ?? 'no details given')}`, {
+            retryable: TRANSIENT_CODES.has(String(event.code)),
+          });
       }
     }
-    throw new ProviderError('The OpenAI stream ended before the response finished.');
+    throw new ProviderError('The OpenAI stream ended before the response finished.', { retryable: true });
   }
 }

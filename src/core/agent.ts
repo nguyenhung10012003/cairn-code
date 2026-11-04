@@ -28,6 +28,20 @@ const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'NotebookEdit']);
 /** Overloaded, or the model is unavailable. Worth another model; anything else would fail there too. */
 const FALLBACK_STATUSES = new Set([404, 503, 529]);
 
+/** 0.5s, 8.2s, 34s, 4m 16s. */
+function waitText(ms: number): string {
+  if (ms < 10_000) return `${Math.round(ms / 100) / 10}s`;
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+/** Why the response failed, in its first sentence, and when it is sent again. */
+function retryNotice(event: Extract<StreamEvent, { type: 'retry' }>, streamed: boolean): string {
+  const reason = /^.*?[.!?](?=\s|$)/s.exec(event.reason)?.[0] ?? `${event.reason}.`;
+  const restart = streamed ? ' The response so far is dropped and starts over.' : '';
+  return `${reason} Retrying in ${waitText(event.delayMs)} (${event.attempt}/${event.maxRetries}).${restart}`;
+}
+
 export type AgentEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'thinking_delta'; text: string }
@@ -368,14 +382,23 @@ export class Agent {
           ...(this.options.outputSchema ? { outputSchema: this.options.outputSchema } : {}),
           ...(this.options.betas ? { betas: this.options.betas } : {}),
         });
+        let streamed = false;
         for await (const event of stream) {
           if (event.type === 'text_delta') {
             partialText += event.text;
+            streamed = true;
             yield { type: 'text_delta', text: event.text };
           } else if (event.type === 'thinking_delta') {
+            streamed = true;
             yield { type: 'thinking_delta', text: event.text };
           } else if (event.type === 'server_tool') {
+            streamed = true;
             yield { type: 'server_tool', name: event.name, ...(event.summary ? { summary: event.summary } : {}) };
+          } else if (event.type === 'retry') {
+            // The response starts over, so what the failed attempt streamed is not part of it.
+            yield { type: 'notice', level: 'warn', text: retryNotice(event, streamed) };
+            partialText = '';
+            streamed = false;
           } else if (event.type === 'message_end') {
             ended = event;
           }

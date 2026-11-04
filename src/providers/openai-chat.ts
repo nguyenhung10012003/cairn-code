@@ -13,14 +13,27 @@ import { emptyUsage } from '../core/messages.ts';
 import { ProviderError } from '../core/provider.ts';
 import type { Effort, ModelProvider, ProviderInit, ProviderRequest, StreamEvent } from '../core/provider.ts';
 import { errorMessage, postJson, serverSentEvents } from './http.ts';
+import { DEFAULT_MAX_RETRIES, withRetries } from './retry.ts';
 
 const PROVIDER_ID = 'openai-chat';
 const DEFAULT_CONTEXT_WINDOW = 128_000;
-const DEFAULT_MAX_RETRIES = 4;
 const MAX_BAD_TOOL_JSON_RETRIES = 2;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
 
 type Json = Record<string, unknown>;
+
+/**
+ * An `error` object sent partway through a stream, as OpenRouter and others do, that a later
+ * request may not hit: a server fault, an overload or a rate limit, but not a used-up quota.
+ */
+function transientStreamError(chunk: Json): boolean {
+  const error = (typeof chunk.error === 'object' && chunk.error ? chunk.error : { message: chunk.error }) as Json;
+  const message = String(error.message ?? '');
+  if (/quota|billing|credit|balance/i.test(message)) return false;
+  const status = typeof error.code === 'number' ? error.code : Number(error.code);
+  if (Number.isFinite(status) && status > 0) return status === 408 || status === 429 || status >= 500;
+  return /server_error|overloaded|rate_limit|timeout|unavailable/i.test(`${String(error.code ?? '')} ${String(error.type ?? '')} ${message}`);
+}
 
 /** Sent when the request calls for them, and dropped for a model whose server rejects them. */
 const OPTIONAL_PARAMS = ['reasoning_effort', 'stream_options', 'response_format', 'parallel_tool_calls'] as const;
@@ -218,7 +231,7 @@ export class OpenAIChatProvider implements ModelProvider {
     }
     if (status === 429) {
       if (/quota|billing|credit|balance/i.test(body)) return new ProviderError(`The ${this.name} account has run out of quota or credit: ${message}`, options);
-      return new ProviderError(`Rate limited by ${this.name}, even after retrying. Wait a little and send the message again.`, { ...options, retryable: true });
+      return new ProviderError(`Rate limited by ${this.name}. Wait a little and send the message again.`, { ...options, retryable: true });
     }
     if (status >= 500) return new ProviderError(`${this.name} is having trouble (HTTP ${status}): ${message}`, { ...options, retryable: true });
     return new ProviderError(`${this.name} rejected the request (HTTP ${status}): ${message}`, options);
@@ -232,7 +245,11 @@ export class OpenAIChatProvider implements ModelProvider {
     return (body.data ?? []).flatMap((model) => (typeof model.id === 'string' ? [model.id] : [])).sort();
   }
 
-  async *stream(request: ProviderRequest): AsyncGenerator<StreamEvent> {
+  stream(request: ProviderRequest): AsyncGenerator<StreamEvent> {
+    return withRetries(this.maxRetries, request.signal, () => this.attempt(request));
+  }
+
+  private async *attempt(request: ProviderRequest): AsyncGenerator<StreamEvent> {
     if (!this.baseUrl) throw new ProviderError(`The provider "${this.name}" has no base URL. Add one with: cairn provider add ${this.name} --base-url <url>`);
     if (!request.model) throw new ProviderError(`No model is set for "${this.name}". Choose one with /model, or --model.`);
     for (let attempt = 0; ; attempt++) {
@@ -248,7 +265,6 @@ export class OpenAIChatProvider implements ModelProvider {
           headers: this.headers(),
           body,
           ...(request.signal ? { signal: request.signal } : {}),
-          maxRetries: this.maxRetries,
           describeError: (status, text) => this.describeError(status, text),
           describeNetworkError: (error) =>
             new ProviderError(`Could not reach ${this.name} at ${this.baseUrl} (${error.message.replace(/[.?!\s]+$/, '')}).`, { retryable: true, cause: error }),
@@ -293,7 +309,9 @@ export class OpenAIChatProvider implements ModelProvider {
       } catch {
         throw new ProviderError(`${this.name} sent an event that is not JSON: ${data.slice(0, 200)}`);
       }
-      if (chunk.error) throw new ProviderError(`${this.name} reported an error during the response: ${errorMessage(JSON.stringify(chunk))}`);
+      if (chunk.error) {
+        throw new ProviderError(`${this.name} reported an error during the response: ${errorMessage(JSON.stringify(chunk))}`, { retryable: transientStreamError(chunk) });
+      }
       sawChunk = true;
       if (chunk.usage) usage = chunk.usage as ChatUsage;
       const choice = (chunk.choices as Json[] | undefined)?.[0];

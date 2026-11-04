@@ -1,81 +1,44 @@
 /**
- * HTTP plumbing shared by the providers that talk to their API with plain fetch: retries with
- * backoff, and readers for server-sent events and newline-delimited JSON streams.
+ * HTTP plumbing shared by the providers that talk to their API with plain fetch: one POST, and
+ * readers for server-sent events and newline-delimited JSON streams. Retries are in retry.ts.
  */
 import { ProviderError } from '../core/provider.ts';
-
-const MAX_BACKOFF_MS = 8_000;
-/** Worth another try: the request may well succeed a moment later. */
-const RETRYABLE_STATUSES = new Set([408, 409, 429]);
+import { retryAfterMs } from './retry.ts';
 
 export interface PostOptions {
   headers: Record<string, string>;
   body: unknown;
   signal?: AbortSignal;
-  maxRetries: number;
-  /** Turns an error response into a message that says what to do. */
+  /** Turns an error response into a message that says what to do, and whether to try again. */
   describeError(status: number, body: string, headers: Headers): ProviderError;
   /** Turns a failure to connect into a message that says what to do. */
   describeNetworkError(error: Error): ProviderError;
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(signal.reason);
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      reject(signal!.reason);
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-function retryDelay(attempt: number, headers?: Headers): number {
-  const ms = Number(headers?.get('retry-after-ms'));
-  if (Number.isFinite(ms) && ms > 0) return Math.min(ms, MAX_BACKOFF_MS * 4);
-  const seconds = Number(headers?.get('retry-after'));
-  if (Number.isFinite(seconds) && seconds > 0) return Math.min(seconds * 1000, MAX_BACKOFF_MS * 4);
-  return Math.min(MAX_BACKOFF_MS, 500 * 2 ** attempt) * (0.75 + Math.random() * 0.5);
 }
 
 function isAbort(error: unknown, signal?: AbortSignal): boolean {
   return signal?.aborted === true || (error as Error)?.name === 'AbortError';
 }
 
-/** POSTs JSON, retrying connection failures, rate limits and server errors. */
+/** POSTs JSON once. A failure comes back as a `ProviderError` that says whether a retry may help. */
 export async function postJson(url: string, options: PostOptions): Promise<Response> {
-  const body = JSON.stringify(options.body);
-  for (let attempt = 0; ; attempt++) {
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...options.headers },
-        body,
-        ...(options.signal ? { signal: options.signal } : {}),
-      });
-    } catch (error) {
-      if (isAbort(error, options.signal)) throw error;
-      if (attempt < options.maxRetries) {
-        await sleep(retryDelay(attempt), options.signal);
-        continue;
-      }
-      throw options.describeNetworkError(error as Error);
-    }
-    if (response.ok) return response;
-    const text = await response.text().catch(() => '');
-    const retryable = RETRYABLE_STATUSES.has(response.status) || response.status >= 500;
-    const described = options.describeError(response.status, text, response.headers);
-    if (retryable && described.retryable && attempt < options.maxRetries) {
-      await sleep(retryDelay(attempt, response.headers), options.signal);
-      continue;
-    }
-    throw described;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...options.headers },
+      body: JSON.stringify(options.body),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+  } catch (error) {
+    if (isAbort(error, options.signal)) throw error;
+    throw options.describeNetworkError(error as Error);
   }
+  if (response.ok) return response;
+  const text = await response.text().catch(() => '');
+  const described = options.describeError(response.status, text, response.headers);
+  const wait = retryAfterMs(response.headers);
+  if (described.retryable && wait !== undefined) described.retryAfterMs = wait;
+  throw described;
 }
 
 /** The `message` of a JSON error body such as `{"error": {"message": ...}}` or `{"error": "..."}`. */
@@ -96,13 +59,19 @@ async function* lines(response: Response): AsyncGenerator<string> {
   if (!response.body) return;
   const decoder = new TextDecoder();
   let buffered = '';
-  for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-    buffered += decoder.decode(chunk, { stream: true });
-    let newline: number;
-    while ((newline = buffered.indexOf('\n')) >= 0) {
-      yield buffered.slice(0, newline).replace(/\r$/, '');
-      buffered = buffered.slice(newline + 1);
+  try {
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      buffered += decoder.decode(chunk, { stream: true });
+      let newline: number;
+      while ((newline = buffered.indexOf('\n')) >= 0) {
+        yield buffered.slice(0, newline).replace(/\r$/, '');
+        buffered = buffered.slice(newline + 1);
+      }
     }
+  } catch (error) {
+    if ((error as Error)?.name === 'AbortError') throw error;
+    // The response had started, so the server took the request: the connection broke under it.
+    throw new ProviderError(`The connection dropped during the response (${(error as Error)?.message ?? String(error)}).`, { retryable: true, cause: error });
   }
   buffered += decoder.decode();
   if (buffered) yield buffered;
