@@ -837,7 +837,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
           }
         } finally {
           subagentTasks.stopAll();
-          agent.addUsage(usageDelta(subagent.totalUsage, usageBefore), subagent.costIsPartial ? undefined : subagent.totalCostUsd - costBefore);
+          agent.addUsage(usageDelta(subagent.totalUsage, usageBefore), subagent.costIsPartial ? undefined : subagent.totalCostUsd - costBefore, subModel);
         }
         return { text: finalText, ...(failure ? { failure } : {}) };
       },
@@ -873,11 +873,12 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
 
   /** One short request for a small JSON answer, such as a session title. Failures give nothing. */
   const quickJson = async (prompt: string, field: string, signal?: AbortSignal): Promise<string | undefined> => {
+    // The provider's small tier, when it has one: a title is not worth the main model.
+    const model = aliasFor('haiku') ?? agent.model;
     try {
       let reply = '';
       const stream = provider.stream({
-        // The provider's small tier, when it has one: a title is not worth the main model.
-        model: aliasFor('haiku') ?? agent.model,
+        model,
         system: [],
         messages: [userText(prompt)],
         tools: [],
@@ -888,7 +889,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       for await (const event of stream) {
         if (event.type === 'message_end') {
           reply = textOf(event.content);
-          agent.addUsage(event.usage, event.costUsd);
+          agent.addUsage(event.usage, event.costUsd, model);
         }
       }
       const json = /\{[\s\S]*\}/.exec(reply)?.[0];

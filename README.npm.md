@@ -38,6 +38,7 @@ cairn -p "explain this repo"         # answer once and exit
 cat log.txt | cairn -p "find bugs"   # also reads standard input
 cairn -c                             # continue the latest session in this directory
 cairn -r <id or name>                # resume an earlier session
+cairn usage                          # tokens and estimated cost per day; also: projects, sessions
 cairn doctor                         # check the installation
 ```
 
@@ -88,6 +89,7 @@ In a session, `/provider` opens a list of providers: type to narrow it, use `↑
 | `/clear`, `/resume`, `/rename` | Start a new conversation, go back to an earlier one, or name this one |
 | `/btw <question>` | Ask a side question without adding it to the conversation |
 | `/cost`, `/context`, `/status` | Tokens and estimated cost, how full the context is, session details |
+| `/usage daily`, `/usage projects`, `/usage sessions` | Saved tokens and estimated cost per day, project or session, like `cairn usage` |
 | `/tasks`, `/todos` | Background commands, and the agent's checklist |
 | `/mcp`, `/skills`, `/agents` | MCP servers, skills and agents in use |
 | `/init` | Write a `CAIRN.md` with notes about this project |
@@ -165,7 +167,7 @@ Replies come from a built-in script instead of a model. Type `help` to see what 
 
 ## Your data
 
-Cairn keeps its files in `~/.cairn` (or `CAIRN_HOME`): settings, saved keys, session transcripts, file checkpoints and memory. `cairn purge --dry-run` lists the transcripts, file history and logs stored for the current project, and `cairn purge --yes` deletes them. The project's own files are not touched.
+Cairn keeps its files in `~/.cairn` (or `CAIRN_HOME`): settings, saved keys, session transcripts, file checkpoints and memory. Each transcript also records the tokens and estimated cost of every response, which `cairn usage` totals per day, `cairn usage projects` per project and `cairn usage sessions` per session; add `--since`, `--until`, `--project <path>` or `--json`. `cairn purge --dry-run` lists the transcripts, file history and logs stored for the current project, and `cairn purge --yes` deletes them. The project's own files are not touched.
 
 ## Versions
 

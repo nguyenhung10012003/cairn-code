@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { sessionsDir } from '../config/paths.ts';
 import { danglingToolResults } from '../core/messages.ts';
-import type { Message } from '../core/messages.ts';
+import type { Message, Usage } from '../core/messages.ts';
 import type { SystemBlock } from '../core/provider.ts';
 
 export type SessionRecord =
@@ -16,7 +16,9 @@ export type SessionRecord =
   | { type: 'message'; ts: string; message: Message }
   | { type: 'compaction'; ts: string; summary: string }
   | { type: 'name'; ts: string; name: string }
-  | { type: 'title'; ts: string; title: string };
+  | { type: 'title'; ts: string; title: string }
+  /** What one response cost, or one subagent run. `costUsd` is null when the model has no known price. */
+  | { type: 'usage'; ts: string; provider: string; model: string; usage: Usage; costUsd: number | null };
 
 export interface SessionSummary {
   id: string;
@@ -93,6 +95,11 @@ export class SessionStore {
 
   appendCompaction(summary: string): void {
     this.append({ type: 'compaction', ts: new Date().toISOString(), summary });
+  }
+
+  /** Kept so that usage reports and resumed sessions still know what was spent. */
+  appendUsage(provider: string, model: string, usage: Usage, costUsd: number | undefined): void {
+    this.append({ type: 'usage', ts: new Date().toISOString(), provider, model, usage, costUsd: costUsd ?? null });
   }
 }
 

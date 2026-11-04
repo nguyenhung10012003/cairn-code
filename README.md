@@ -98,6 +98,7 @@ cairn -n refactor                   # name the session; later, cairn -r refactor
 cairn --agent reviewer              # run the whole session as one agent
 cairn --plugin-dir ./toolkit        # load a plugin for this run
 cairn doctor                        # check the installation
+cairn usage                         # tokens and estimated cost per day; also: projects, sessions
 cairn purge --dry-run               # show the data stored for this project
 ```
 
@@ -106,6 +107,8 @@ cairn purge --dry-run               # show the data stored for this project
 **Minimal modes:** `--bare` skips hooks, installed plugins, and the discovery of instructions and skills. `--safe-mode` turns off every customization, to troubleshoot a broken configuration. `--restricted` removes the tools that run code and reads no settings files. Others: `--setting-sources`, `--disable-slash-commands`, `--autocompact`, `--betas`, `--debug`, `--debug-file`, `--allow-dangerously-skip-permissions`.
 
 In an interactive session: `Esc` or `Ctrl+C` interrupts the running turn, `Shift+Tab` cycles the permission mode, ending a line with `\` continues it on the next line, `/help` lists commands, and `/cost` shows tokens and estimated cost.
+
+**Usage reports:** the tokens and estimated cost of each model response, and of each subagent run, are saved in the session's transcript. `cairn usage` totals them per day, `cairn usage projects` per project, and `cairn usage sessions` per session. `--project <path>`, `--since` and `--until` (`YYYY-MM-DD`, local time, both days included) narrow a report, and `--json` prints JSON with every token count. In a session, `/usage daily`, `/usage projects` and `/usage sessions` show the same reports, and after a resume `/cost` also shows what the session has spent over every run. Costs are estimates at list prices, and a `+` marks a total that includes a model with no known price. Sessions saved before this feature, and sessions run with `--no-session-persistence`, have nothing recorded and are not counted. `cairn purge` deletes a project's figures along with its transcripts.
 
 **Typing while the agent works:** the line you type and a status line stay at the bottom, and output appears above them, so you can keep typing at any time.
 
@@ -523,8 +526,8 @@ src/sandbox/          Seatbelt, bubblewrap and the network proxy
 src/tools/            The tools, including images, PDFs, notebooks and background commands
 src/permissions/      Shell parsing, rules, and the decision engine
 src/hooks/            Running hooks
-src/session/          Transcripts, checkpoints and worktrees
-src/commands/         Slash commands, `doctor` and `purge`
+src/session/          Transcripts, usage records, checkpoints and worktrees
+src/commands/         Slash commands, `doctor`, `purge` and `usage`
 src/ui/               REPL and print mode
 scripts/build-npm.ts  Builds dist/npm/, the directory published to npm
 README.npm.md         The README shown on npm

@@ -253,7 +253,7 @@ export class Agent {
       ...(focus === undefined ? {} : { focus }),
       ...(signal ? { signal } : {}),
     });
-    this.addUsage(result.usage, result.costUsd);
+    this.addUsage(result.usage, result.costUsd, this.model);
     this.messages = compactedHistory(result.summary, this.skillsToKeep());
     this.store.appendCompaction(textOf(this.messages[0]!.content));
     this.lastContextTokens = null;
@@ -281,11 +281,16 @@ export class Agent {
     return kept;
   }
 
-  /** Also used to add in what subagents spent. */
-  addUsage(usage: Usage, costUsd: number | undefined): void {
+  /**
+   * Also used to add in what subagents spent. Each call is also kept in the transcript, under the
+   * session that is current at the time, so reports never count the same spending twice.
+   */
+  addUsage(usage: Usage, costUsd: number | undefined, model: string): void {
     this.totalUsage = addUsage(this.totalUsage, usage);
     if (costUsd === undefined) this.costIsPartial = true;
     else this.totalCostUsd += costUsd;
+    const spent = contextTokens(usage) + usage.outputTokens + usage.webSearches > 0 || (costUsd ?? 0) > 0;
+    if (spent) this.store.appendUsage(this.options.provider.name, model, usage, costUsd);
   }
 
   private shouldAutoCompact(): boolean {
@@ -366,12 +371,13 @@ export class Agent {
 
       let ended: Extract<StreamEvent, { type: 'message_end' }> | undefined;
       let partialText = '';
+      const requestModel = fallbacks[fallbackIndex] ?? this.turnModel ?? this.model;
       try {
         const serverTools = this.availableServerTools();
         const effort = this.turnEffort ?? this.effort;
-        debug('api', `request: ${fallbacks[fallbackIndex] ?? this.turnModel ?? this.model}, ${this.messages.length} messages`);
+        debug('api', `request: ${requestModel}, ${this.messages.length} messages`);
         const stream = this.options.provider.stream({
-          model: fallbacks[fallbackIndex] ?? this.turnModel ?? this.model,
+          model: requestModel,
           system: this.system,
           messages: this.messages,
           tools: this.toolDefinitions(),
@@ -431,7 +437,7 @@ export class Agent {
         return;
       }
 
-      this.addUsage(ended.usage, ended.costUsd);
+      this.addUsage(ended.usage, ended.costUsd, requestModel);
       this.lastContextTokens = contextTokens(ended.usage);
       yield { type: 'usage', turn: ended.usage, total: this.totalUsage };
       for (const notice of ended.notices ?? []) yield { type: 'notice', level: 'warn', text: notice };

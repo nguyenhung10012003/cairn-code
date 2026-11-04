@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runDoctor, runPurge } from './commands/maintenance.ts';
 import { parseTokenCount } from './commands/slash.ts';
+import { runUsageCommand } from './commands/usage.ts';
 import { APP_NAME, VERSION } from './config/paths.ts';
 import { loadSettings, SETTING_SOURCES } from './config/settings.ts';
 import type { SettingSource } from './config/settings.ts';
@@ -90,6 +91,7 @@ Commands:
   mcp                               Add, list and sign in to MCP servers
   plugin                            Validate, install and manage plugins
   doctor                            Check this installation
+  usage [daily|projects|sessions]   Tokens and estimated cost from saved sessions
   purge [path]                      Delete a project's saved data from this machine
 `;
 
@@ -166,6 +168,7 @@ async function main(): Promise<number> {
   if (subcommand === 'plugin' || subcommand === 'plugins') return runPluginCommand(process.argv.slice(3));
   if (subcommand === 'doctor') return runDoctor(realpathSync(process.cwd()));
   if (subcommand === 'purge') return runPurge(process.argv.slice(3), realpathSync(process.cwd()));
+  if (subcommand === 'usage') return runUsageCommand(process.argv.slice(3), realpathSync(process.cwd()));
   const { values, positionals } = parseArgs({
     args: normalizeOptionalFlags(process.argv.slice(2)),
     allowPositionals: true,

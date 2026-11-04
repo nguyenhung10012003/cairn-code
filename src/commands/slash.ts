@@ -12,10 +12,12 @@ import type { McpServerState } from '../mcp/manager.ts';
 import { PERMISSION_MODES } from '../permissions/engine.ts';
 import type { PermissionMode } from '../permissions/engine.ts';
 import { listSessions } from '../session/store.ts';
+import { sessionTotals, totalTokens } from '../session/usage.ts';
 import { splitArguments } from '../skills/skills.ts';
 import type { Skill, SkillActivation } from '../skills/skills.ts';
 import { prepareSkill, SkillError } from '../tools/skill.ts';
 import { modelCommand, providerCommand } from './provider.ts';
+import { parseUsageArgs, usageReport } from './usage.ts';
 
 export interface CommandResult {
   /** Text to print. */
@@ -160,6 +162,15 @@ const BUILTINS: Record<string, BuiltinCommand> = {
     run: (_args, runtime) => {
       const { totalUsage: usage, totalCostUsd, costIsPartial } = runtime.agent;
       const cost = `$${totalCostUsd.toFixed(4)}`;
+      // After a resume the transcript holds earlier runs too; after /clear, less than this run.
+      const saved = sessionTotals(runtime.agent.transcriptPath);
+      const savedLine = saved !== null && (totalTokens(saved.usage) !== totalTokens(usage) || Math.abs(saved.costUsd - totalCostUsd) > 1e-9)
+        ? [
+            '',
+            `Saved for this session over every run: ${formatTokens(totalTokens(saved.usage))} tokens, ${saved.costIsPartial ? 'at least ' : ''}$${saved.costUsd.toFixed(4)}.`,
+            `Reports: /usage daily, /usage projects, /usage sessions.`,
+          ]
+        : [];
       return {
         output: [
           `Input:        ${formatTokens(usage.inputTokens)}`,
@@ -170,6 +181,7 @@ const BUILTINS: Record<string, BuiltinCommand> = {
           costIsPartial
             ? `Estimated:    at least ${cost} (some models have no known price)`
             : `Estimated:    ${cost} at list prices. Your actual bill is what the Console shows.`,
+          ...savedLine,
         ].join('\n'),
       };
     },
@@ -386,7 +398,7 @@ const BUILTINS: Record<string, BuiltinCommand> = {
           for await (const event of stream) {
             if (event.type === 'message_end') {
               reply = textOf(event.content);
-              runtime.agent.addUsage(event.usage, event.costUsd);
+              runtime.agent.addUsage(event.usage, event.costUsd, runtime.agent.model);
             }
           }
           return { output: reply || 'No answer came back.' };
@@ -549,8 +561,15 @@ const BUILTINS: Record<string, BuiltinCommand> = {
     },
   },
   usage: {
-    description: 'Same as /cost',
-    run: (args, runtime, io) => BUILTINS.cost!.run(args, runtime, io),
+    description: 'Same as /cost. With daily, projects or sessions: saved totals from every session',
+    run: (args, runtime, io) => {
+      if (!args.trim()) return BUILTINS.cost!.run(args, runtime, io);
+      try {
+        return { output: usageReport(parseUsageArgs(splitArguments(args), runtime.context.cwd())) };
+      } catch (error) {
+        return { output: `${(error as Error).message}\nUsage: /usage [daily|projects|sessions] [--project <path>] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--json]` };
+      }
+    },
   },
   init: {
     description: `Write a ${INSTRUCTION_FILE} for this project`,
