@@ -169,6 +169,7 @@ Cairn keeps its files in `~/.cairn` (or `CAIRN_HOME`): settings, saved keys, ses
 
 ## Versions
 
+- **0.1.2:** a failed model request is retried up to 10 times, waiting longer each time (from half a second up to 5 minutes), and a reply that breaks off partway is started over. Each retry is shown as it happens. Releases are now published from GitHub Actions, with npm provenance.
 - **0.1.1:** this README, written for people installing Cairn. The program is the same as in 0.1.0.
 - **0.1.0:** the first release.
 

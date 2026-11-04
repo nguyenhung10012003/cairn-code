@@ -54,14 +54,34 @@ What npm receives is the directory `dist/npm/`, which `bun run build:npm` writes
 
 `README.npm.md` is the page people see on npm, so it is written for installing and using Cairn. This file is for working on Cairn. The `package.json` in the repository is marked private, so a plain `npm publish` here fails instead of uploading the wrong thing.
 
+npm never accepts the same version twice, so raise the version for each release. `build:npm` stops if the version in `package.json` differs from `VERSION` in `src/config/paths.ts`, so change both together.
+
+**Releasing from GitHub Actions.** Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:
+
+1. the whole CI workflow on the tagged commit;
+2. a check that the tag matches `package.json`, then `build:npm` and `npm pack`, once;
+3. `npm publish` of that tarball through npm trusted publishing, so npm also records provenance;
+4. a GitHub release with the same tarball. Its notes are the `- **X.Y.Z:**` line from the Versions section of `README.npm.md`, followed by GitHub's list of changes.
+
+```sh
+# after setting the version in package.json and src/config/paths.ts, and adding its line to README.npm.md
+git commit -am "Release 0.1.2"
+git tag v0.1.2
+git push origin main v0.1.2
+```
+
+A job that failed can be re-run: a version already on npm, or a release already on GitHub, is left as it is.
+
+The workflow holds no npm token. It needs a one-time setup on npmjs.com: in the package's **Settings > Trusted publishing**, add GitHub Actions with user `nguyenhung10012003`, repository `cairn-code`, workflow `release.yml` and no environment, and allow `npm publish`. A new trusted publisher must be used within 2 days of being added, or it expires.
+
+**Releasing by hand** still works:
+
 ```sh
 bun run build:npm && npm pack ./dist/npm --dry-run   # what would be uploaded
 npm login
 bun run release                # typecheck, tests, build:npm, then npm publish ./dist/npm
 bun run release:stage          # the same, but staged: approve it with 2FA via `npm stage approve <id>` or on npmjs.com
 ```
-
-npm never accepts the same version twice, so raise the version for each release. `build:npm` stops if the version in `package.json` differs from `VERSION` in `src/config/paths.ts`, so change both together.
 
 ## Usage
 
