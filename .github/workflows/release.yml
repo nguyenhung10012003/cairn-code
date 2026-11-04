@@ -1,0 +1,178 @@
+# Publishes a release when a version tag is pushed: `git tag v0.1.2 && git push origin v0.1.2`.
+#
+# 1. ci:      the whole CI workflow on the tagged commit.
+# 2. build:   checks the tag against the version, builds dist/npm once and packs it.
+# 3. npm:     publishes that tarball to npm through trusted publishing (OIDC), with provenance.
+# 4. github:  creates the GitHub release, with the same tarball and the notes for this version.
+#
+# One-time setup on npmjs.com, package cairn-code > Settings > Trusted publishing > GitHub Actions:
+# user nguyenhung10012003, repository cairn-code, workflow release.yml, no environment, and allow
+# `npm publish`. No npm token is stored in GitHub.
+#
+# Every job can be re-run: a version already on npm, or a release already on GitHub, is left as it is.
+
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: 1.3.9
+  PACKAGE: cairn-code
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build the package
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+
+      - name: Check the tag matches package.json
+        id: version
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Write the release notes from README.npm.md
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          prefix="- **${VERSION}:** "
+          line=$(grep -F -- "$prefix" README.npm.md || true)
+          if [ -z "$line" ]; then
+            echo "::error::README.npm.md has no '${prefix}' line under Versions."
+            exit 1
+          fi
+          notes="${line#"$prefix"}"
+          mkdir -p "$RUNNER_TEMP/release"
+          {
+            echo "${notes^}"
+            echo
+            echo "Install with \`npm install -g ${PACKAGE}@${VERSION}\`, or see it on [npm](https://www.npmjs.com/package/${PACKAGE}/v/${VERSION})."
+          } > "$RUNNER_TEMP/release/notes.md"
+          cat "$RUNNER_TEMP/release/notes.md"
+
+      # build:npm also stops if VERSION in src/config/paths.ts differs from package.json.
+      - name: Build and pack dist/npm
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          bun run build:npm
+          npm pack ./dist/npm --pack-destination "$RUNNER_TEMP/release"
+          tarball="$RUNNER_TEMP/release/${PACKAGE}-${VERSION}.tgz"
+          files=$(tar -tzf "$tarball" | sort | tr '\n' ' ')
+          echo "$files"
+          test "$files" = "package/README.md package/cli.js package/package.json "
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+          retention-days: 30
+
+  npm:
+    name: Publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Trusted publishing exchanges this OIDC token for a short-lived npm token.
+      id-token: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+
+      - name: Check npm can use trusted publishing
+        run: |
+          npm --version
+          node -e '
+            const [major, minor, patch] = process.argv[1].split(".").map(Number);
+            if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) {
+              console.error("Trusted publishing needs npm 11.5.1 or later.");
+              process.exit(1);
+            }
+          ' "$(npm --version)"
+
+      - name: Publish
+        run: |
+          # Asked without credentials, so the answer cannot depend on the token setup-node writes.
+          status=$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/${PACKAGE}/${VERSION}")
+          if [ "$status" = 200 ]; then
+            echo "${PACKAGE}@${VERSION} is already on npm, so nothing is published."
+            exit 0
+          fi
+          if [ "$status" != 404 ]; then
+            echo "::error::The npm registry answered HTTP $status when asked about ${PACKAGE}@${VERSION}."
+            exit 1
+          fi
+          npm publish "release/${PACKAGE}-${VERSION}.tgz"
+
+  github:
+    name: Create the GitHub release
+    needs: [build, npm]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+
+      - name: Create or update the release
+        run: |
+          tarball="release/${PACKAGE}-${VERSION}.tgz"
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "The release exists, so only the tarball is uploaded again."
+            gh release upload "$GITHUB_REF_NAME" "$tarball" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$tarball" \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file release/notes.md \
+              --generate-notes
+          fi
