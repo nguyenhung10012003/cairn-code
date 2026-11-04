@@ -144,7 +144,8 @@ jobs:
             echo "::error::The npm registry answered HTTP $status when asked about ${PACKAGE}@${VERSION}."
             exit 1
           fi
-          npm publish "release/${PACKAGE}-${VERSION}.tgz"
+          # The ./ matters: npm reads "release/<file>.tgz" as the GitHub repository release/<file>.tgz.
+          npm publish "./release/${PACKAGE}-${VERSION}.tgz"
 
   github:
     name: Create the GitHub release
