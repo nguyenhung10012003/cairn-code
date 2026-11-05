@@ -101,6 +101,8 @@ export function toOpenAIInput(messages: readonly Message[]): Item[] {
           });
         } else if (block.type === 'text') {
           parts.push({ type: 'input_text', text: block.text });
+        } else if (block.type === 'image') {
+          parts.push(attachmentPart({ kind: 'image', mediaType: block.mediaType, data: block.data }));
         }
       }
       if (parts.length > 0) input.push({ type: 'message', role: 'user', content: parts });

@@ -61,16 +61,19 @@ export function toChatMessages(system: string, messages: readonly Message[]): Js
     }
     const texts: string[] = [];
     const images: Json[] = [];
+    const imageUrl = (mediaType: string, data: string): Json => ({ type: 'image_url', image_url: { url: `data:${mediaType};base64,${data}` } });
     for (const block of message.content) {
       if (block.type === 'tool_result') {
         let content = block.is_error ? `Error: ${block.content}` : block.content;
         for (const attachment of block.attachments ?? []) {
-          if (attachment.kind === 'image') images.push({ type: 'image_url', image_url: { url: `data:${attachment.mediaType};base64,${attachment.data}` } });
+          if (attachment.kind === 'image') images.push(imageUrl(attachment.mediaType, attachment.data));
           else content += '\n\n[A PDF was attached, but this API takes only text and images.]';
         }
         out.push({ role: 'tool', tool_call_id: block.tool_use_id, content });
       } else if (block.type === 'text') {
         texts.push(block.text);
+      } else if (block.type === 'image') {
+        images.push(imageUrl(block.mediaType, block.data));
       }
     }
     // Tool messages take text only, so images from a tool follow in a user message.

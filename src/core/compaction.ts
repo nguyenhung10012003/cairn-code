@@ -37,6 +37,8 @@ export function renderTranscript(messages: Message[]): string {
             ? `${block.content.slice(0, MAX_TOOL_OUTPUT_CHARS)}… [truncated]`
             : block.content;
         parts.push(`Tool ${block.is_error ? 'error' : 'result'}: ${content}`);
+      } else if (block.type === 'image') {
+        parts.push('User attached an image, which this transcript cannot show.');
       }
     }
   }

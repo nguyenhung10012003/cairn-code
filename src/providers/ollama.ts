@@ -70,6 +70,8 @@ export function toOllamaMessages(system: string, messages: readonly Message[]): 
         out.push({ role: 'tool', content, tool_name: toolNames.get(block.tool_use_id) ?? 'tool', tool_call_id: block.tool_use_id });
       } else if (block.type === 'text') {
         texts.push(block.text);
+      } else if (block.type === 'image') {
+        images.push(block.data);
       }
     }
     // Ollama takes images on messages, not on tool results, so they follow in a user message.

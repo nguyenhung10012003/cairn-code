@@ -6,7 +6,7 @@
 import { compactedHistory, summarizeConversation } from './compaction.ts';
 import { debug } from './debug.ts';
 import { addUsage, contextTokens, emptyUsage, textOf } from './messages.ts';
-import type { ContentBlock, Message, StopReason, ToolResultBlock, ToolUseBlock, Usage } from './messages.ts';
+import type { ContentBlock, ImageBlock, Message, StopReason, ToolResultBlock, ToolUseBlock, Usage } from './messages.ts';
 import type { Effort, JsonSchema, ModelProvider, ServerTool, StreamEvent, SystemBlock, ToolDefinition } from './provider.ts';
 import type { HookCommonInput, HookRunner } from '../hooks/runner.ts';
 import type { PermissionEngine } from '../permissions/engine.ts';
@@ -317,10 +317,20 @@ export class Agent {
   async *resumeForNotes(signal: AbortSignal): AsyncGenerator<AgentEvent> {
     const notes = this.options.watcher?.drain() ?? [];
     if (notes.length === 0) return;
-    yield* this.run('', signal, undefined, notes);
+    yield* this.run('', signal, undefined, { notes });
   }
 
-  async *run(prompt: string, signal: AbortSignal, activation?: SkillActivation, notes?: string[]): AsyncGenerator<AgentEvent> {
+  /**
+   * `extra.images` go with the prompt, ahead of its text, which names them. `extra.notes` start a
+   * turn that nobody typed.
+   */
+  async *run(
+    prompt: string,
+    signal: AbortSignal,
+    activation?: SkillActivation,
+    extra: { notes?: string[]; images?: ImageBlock[] } = {},
+  ): AsyncGenerator<AgentEvent> {
+    const { notes } = extra;
     if (this.options.ownsTurnState) {
       this.options.engine.clearTurnRules();
       this.turnModel = undefined;
@@ -343,7 +353,8 @@ export class Agent {
       this.options.context.checkpoints?.beginTurn();
       this.options.onPromptStart?.();
 
-      content.push({ type: 'text', text: prompt });
+      // Models read a picture best when it comes before the text about it.
+      content.push(...(extra.images ?? []), { type: 'text', text: prompt });
       for (const context of submit.additionalContext) {
         content.push({ type: 'text', text: `<hook-context>\n${context}\n</hook-context>` });
       }

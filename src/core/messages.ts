@@ -43,7 +43,14 @@ export interface OpaqueBlock {
   data: unknown;
 }
 
-export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | OpaqueBlock;
+/** A picture the user attached to a message, base64-encoded. Only user messages carry these. */
+export interface ImageBlock {
+  type: 'image';
+  mediaType: string;
+  data: string;
+}
+
+export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock | OpaqueBlock;
 
 export interface Message {
   role: 'user' | 'assistant';

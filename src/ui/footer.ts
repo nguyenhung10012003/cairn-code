@@ -39,6 +39,13 @@ export interface FooterOptions {
   /** Ctrl+D on an empty line. */
   onEof: () => void;
   onShiftTab: () => void;
+  /**
+   * Ctrl+V, or a paste with nothing in it, which is what some terminals send when the clipboard
+   * holds a picture. `quiet` for the empty paste, which should say nothing when there is no image.
+   */
+  onPasteImage?: (quiet: boolean) => void;
+  /** A paste was typed in. Returning true takes it back out of the line, for the caller to handle. */
+  onPaste?: (text: string) => boolean;
 }
 
 function stripAnsi(text: string): string {
@@ -60,6 +67,8 @@ export class Footer {
   private drawn = false;
   private cursorRow = 0;
   private pasting = false;
+  /** Where the cursor was when the current paste began. */
+  private pasteStart = 0;
   private readonly host: MenuHost;
   /** While something has the whole screen: what was printed meanwhile, to show once it is back. */
   private held: string[] | null = null;
@@ -287,10 +296,15 @@ export class Footer {
   private readonly onKey = (text: string | undefined, key: Key | undefined): void => {
     if (key?.name === 'paste-start') {
       this.pasting = true;
+      this.pasteStart = this.editor.cursor;
       return;
     }
     if (key?.name === 'paste-end') {
       this.pasting = false;
+      // The cursor only moves forward while a paste is inserted, so what it passed is the paste.
+      const pasted = [...this.editor.text].slice(this.pasteStart, this.editor.cursor).join('');
+      if (!pasted) this.options.onPasteImage?.(true);
+      else if (this.options.onPaste?.(pasted)) this.editor.removeRange(this.pasteStart, this.editor.cursor);
       this.menu.update(key, this.host);
       this.render();
       return;
@@ -351,6 +365,10 @@ export class Footer {
         case 'n':
           editor.historyForward();
           break;
+        case 'v':
+          // Terminals paste text only, so an image on the clipboard is fetched on request.
+          this.options.onPasteImage?.(false);
+          return;
         case 'left':
           editor.wordLeft();
           break;

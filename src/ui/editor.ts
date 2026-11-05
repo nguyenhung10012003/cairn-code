@@ -17,6 +17,8 @@ export class LineEditor {
   private readonly history: string[] = [];
   /** Where Up and Down are in the history, with what was being typed before. */
   private browsing: { index: number; draft: string } | undefined;
+  /** Text that Backspace deletes whole when it ends right at the cursor, such as an image's placeholder. Anchored with `$`. */
+  atomic: RegExp | undefined;
 
   get text(): string {
     return this.buffer.join('');
@@ -46,8 +48,18 @@ export class LineEditor {
 
   backspace(): void {
     if (this.cursor === 0) return;
-    this.buffer.splice(this.cursor - 1, 1);
-    this.cursor--;
+    const whole = this.atomic?.exec(this.buffer.slice(0, this.cursor).join(''));
+    const count = whole?.[0] ? chars(whole[0]).length : 1;
+    this.buffer.splice(this.cursor - count, count);
+    this.cursor -= count;
+  }
+
+  /** Removes the characters from `start` up to `end`, keeping the cursor on the same text. */
+  removeRange(start: number, end: number): void {
+    this.buffer.splice(start, end - start);
+    if (this.cursor >= end) this.cursor -= end - start;
+    else if (this.cursor > start) this.cursor = start;
+    this.browsing = undefined;
   }
 
   deleteForward(): void {

@@ -77,6 +77,7 @@ In a session, `/provider` opens a list of providers: type to narrow it, use `↑
 - **The input sits between two rules,** and the right end of the status line shows the model and effort level. The terminal window is titled `Cairn · <project folder>`.
 - **Typing `/`** opens a menu of commands that narrows as you type. `↑` `↓` choose, `Enter` runs, `Tab` completes.
 - **Permission prompts** list Yes, Yes and don't ask again, and No. `↑` `↓` and `Enter` choose, `y` `a` `n` answer at once, and `Tab` adds a note for the model to the highlighted answer.
+- **Images:** `Ctrl+V` pastes the image on the clipboard as `[Image #1]`, and image files dropped on the terminal are attached the same way. Delete the placeholder to leave the image out. On Linux this needs `wl-clipboard` (Wayland) or `xclip` (X11).
 - **Keys:** `Esc` or `Ctrl+C` stops the running work. `Shift+Tab` changes the permission mode. `Alt+Enter`, or a line ending in `\`, starts a new line. Pasted text keeps its line breaks. `Ctrl+D` on an empty line quits.
 
 | Command | What it does |

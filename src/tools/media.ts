@@ -61,29 +61,45 @@ async function shrinkImage(path: string, signal: AbortSignal): Promise<Buffer | 
   }
 }
 
-export async function readImage(path: string, size: number, signal: AbortSignal): Promise<ToolOutput> {
-  if (size > MAX_IMAGE_FILE_BYTES) {
-    return failure(`${path} is too large to read as an image. Resize it or export a smaller copy, then read that copy.`);
-  }
+export type PreparedImage =
+  | {
+      ok: true;
+      mediaType: string;
+      /** Base64, as the model takes it. */
+      data: string;
+      /** The size of the file, before any shrinking. */
+      fileBytes: number;
+      shrunk: boolean;
+    }
+  | { ok: false; problem: 'too-large' | 'not-an-image' | 'cannot-shrink' };
+
+/** The image in a file as the model can take it, shrunk to a JPEG when it is over the size limit. */
+export async function prepareImage(path: string, size: number, signal: AbortSignal): Promise<PreparedImage> {
+  if (size > MAX_IMAGE_FILE_BYTES) return { ok: false, problem: 'too-large' };
   const bytes = await readFile(path);
   const mediaType = imageMediaType(bytes);
-  if (!mediaType) return failure(`${path} does not contain a PNG, JPEG, GIF or WebP image, whatever its name says.`);
-  let sent = bytes;
-  let type = mediaType;
-  let note = '';
-  if (bytes.length > MAX_SENT_IMAGE_BYTES) {
-    const shrunk = await shrinkImage(path, signal);
-    if (!shrunk || shrunk.length > MAX_SENT_IMAGE_BYTES) {
-      return failure(`${path} is over the size limit for images and could not be shrunk here. Crop or resize it with a shell command, then read the result.`);
-    }
-    sent = Buffer.from(shrunk);
-    type = 'image/jpeg';
-    note = ' It was shrunk to fit, so fine detail may be lost: crop a region and read that if you need it.';
+  if (!mediaType) return { ok: false, problem: 'not-an-image' };
+  if (bytes.length <= MAX_SENT_IMAGE_BYTES) return { ok: true, mediaType, data: bytes.toString('base64'), fileBytes: bytes.length, shrunk: false };
+  const shrunk = await shrinkImage(path, signal);
+  if (!shrunk || shrunk.length > MAX_SENT_IMAGE_BYTES) return { ok: false, problem: 'cannot-shrink' };
+  return { ok: true, mediaType: 'image/jpeg', data: Buffer.from(shrunk).toString('base64'), fileBytes: bytes.length, shrunk: true };
+}
+
+export async function readImage(path: string, size: number, signal: AbortSignal): Promise<ToolOutput> {
+  const image = await prepareImage(path, size, signal);
+  if (!image.ok) {
+    const problems = {
+      'too-large': `${path} is too large to read as an image. Resize it or export a smaller copy, then read that copy.`,
+      'not-an-image': `${path} does not contain a PNG, JPEG, GIF or WebP image, whatever its name says.`,
+      'cannot-shrink': `${path} is over the size limit for images and could not be shrunk here. Crop or resize it with a shell command, then read the result.`,
+    };
+    return failure(problems[image.problem]);
   }
+  const note = image.shrunk ? ' It was shrunk to fit, so fine detail may be lost: crop a region and read that if you need it.' : '';
   return {
-    content: `Image from ${path} (${type}, ${bytes.length} bytes).${note}`,
-    display: `image, ${Math.ceil(bytes.length / 1024)} KB`,
-    attachments: [{ kind: 'image', mediaType: type, data: sent.toString('base64') }],
+    content: `Image from ${path} (${image.mediaType}, ${image.fileBytes} bytes).${note}`,
+    display: `image, ${Math.ceil(image.fileBytes / 1024)} KB`,
+    attachments: [{ kind: 'image', mediaType: image.mediaType, data: image.data }],
   };
 }
 

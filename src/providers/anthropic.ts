@@ -117,6 +117,9 @@ export function toApiMessages(messages: readonly Message[]): unknown[] {
             ...(block.is_error ? { is_error: true } : {}),
           });
           break;
+        case 'image':
+          content.push({ type: 'image', source: { type: 'base64', media_type: block.mediaType, data: block.data } });
+          break;
         case 'opaque':
           // A block from another provider means nothing here, so it cannot be sent.
           if (block.provider === PROVIDER_ID) content.push(block.data);

@@ -168,6 +168,7 @@ const BUILTINS: Record<string, BuiltinCommand> = {
         'Typing / lists commands as you type: Up and Down choose, Enter runs, Tab completes, Esc closes the list.',
         'In a permission prompt: Up and Down choose, Enter confirms, Tab adds a note to the answer, Esc says no.',
         'In /usage: Left and Right switch tabs, Up and Down scroll, Esc goes back to the conversation.',
+        'Ctrl+V pastes an image from the clipboard as [Image #1], and an image file dropped on the terminal is attached the same way. Delete the placeholder to leave the image out.',
         'A message waits 3 seconds before it is sent: type more to add to it, Enter on an empty line to send it now, Esc to edit it.',
         'Sending a message while the agent works stops that work and answers the new message. /queue <message> waits its turn instead.',
       );

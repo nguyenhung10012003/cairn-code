@@ -12,10 +12,13 @@ import { commandEntries, parseSlash, runSlashCommand, settleCommand } from '../c
 import type { CommandIO, CommandResult, TabPage } from '../commands/slash.ts';
 import type { Agent, AgentEvent } from '../core/agent.ts';
 import { contextTokens } from '../core/messages.ts';
+import type { ImageBlock } from '../core/messages.ts';
 import type { Runtime } from '../core/runtime.ts';
 import type { PermissionMode } from '../permissions/engine.ts';
 import type { SkillActivation } from '../skills/skills.ts';
 import type { PermissionAnswer, PermissionPrompt, Prompter, UserQuestion } from '../tools/types.ts';
+import { AttachedImages, droppedImagePaths, loadImage, markPlaceholders, PLACEHOLDER_AT_END } from './attachments.ts';
+import { readClipboardImage } from './clipboard.ts';
 import { Footer } from './footer.ts';
 import { chooseWithNote, pickFromList, readSecret } from './picker.ts';
 import type { ChoiceOption } from './picker.ts';
@@ -283,7 +286,7 @@ const plural = (count: number, word: string): string => `${count} ${word}${count
 
 /** What the user typed, as it appears in the conversation above the prompt. */
 function echo(text: string): string {
-  const [first, ...rest] = sanitize(text).split('\n');
+  const [first, ...rest] = markPlaceholders(sanitize(text), style.cyan).split('\n');
   return `${style.cyan('>')} ${first}${rest.map((line) => `\n  ${line}`).join('')}\n`;
 }
 
@@ -322,6 +325,9 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
   let exiting = false;
   let frame = 0;
   let quitHinted = false;
+  const attached = new AttachedImages();
+  /** Images being read or shrunk, whose placeholders are not on the line yet. */
+  let attaching = 0;
   let resolveExit!: () => void;
   const exited = new Promise<void>((resolve) => (resolveExit = resolve));
 
@@ -341,6 +347,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     if (shells > 0) parts.push(plural(shells, 'shell'));
     if (monitors > 0) parts.push(plural(monitors, 'monitor'));
     if (queue.length > 0) parts.push(`${queue.length} queued`);
+    if (attaching > 0) parts.push('Attaching an image…');
     const usage = runtime.agent.totalUsage;
     parts.push(`${shortCount(contextTokens(usage) + usage.outputTokens)} tokens`);
     return parts.join(' · ');
@@ -371,9 +378,84 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
       const index = modes.indexOf(runtime.engine.mode);
       runtime.engine.mode = modes[(index + 1) % modes.length]!;
     },
+    onPasteImage: (quiet) => void pasteImage(quiet),
+    onPaste: (text) => {
+      const paths = droppedImagePaths(text);
+      if (!paths) return false;
+      void attachFiles(paths);
+      return true;
+    },
   });
+  footer.editor.atomic = PLACEHOLDER_AT_END;
   const print = (text: string): void => footer.print(text);
   terminal.print = print;
+
+  /** Puts placeholders, or paths, on the line at the cursor, with a space on either side of them. */
+  const insertAtCursor = (pieces: string[]): void => {
+    if (pieces.length === 0) return;
+    const editor = footer.editor;
+    const before = [...editor.text][editor.cursor - 1];
+    editor.insert(`${before === undefined || /\s/.test(before) ? '' : ' '}${pieces.join(' ')} `);
+    footer.render();
+  };
+
+  /** Reads images one after another. Each gives its placeholder, or null when it could not be read. */
+  const attachImages = async (sources: { path: string; label: string }[]): Promise<(string | null)[]> => {
+    const placeholders: (string | null)[] = [];
+    for (const { path, label } of sources) {
+      const loaded = await loadImage(path, label, new AbortController().signal);
+      if (!loaded.ok) {
+        print(`${style.yellow(`! ${sanitize(loaded.message)}`)}\n`);
+        placeholders.push(null);
+        continue;
+      }
+      const placeholder = attached.add(loaded.image);
+      if (loaded.shrunk) print(style.dim(`${placeholder} was over the size limit, so it was shrunk to a JPEG and fine detail may be lost.\n`));
+      placeholders.push(placeholder);
+    }
+    return placeholders;
+  };
+
+  /** Ctrl+V: the picture on the clipboard. */
+  const pasteImage = async (quiet: boolean): Promise<void> => {
+    attaching++;
+    footer.render();
+    try {
+      const clip = await readClipboardImage();
+      if (!clip.ok) {
+        if (!(quiet && clip.empty)) print(style.dim(`${sanitize(clip.message)}\n`));
+        return;
+      }
+      try {
+        const [placeholder] = await attachImages([{ path: clip.path, label: 'The clipboard image' }]);
+        if (placeholder) insertAtCursor([placeholder]);
+      } finally {
+        await clip.cleanup();
+      }
+    } catch (error) {
+      print(`${style.red(`Could not paste the image: ${sanitize((error as Error).message)}`)}\n`);
+    } finally {
+      attaching--;
+      footer.render();
+    }
+  };
+
+  /** Picture files dropped on the terminal, which pastes their paths. A file that fails goes back as its path. */
+  const attachFiles = async (paths: string[]): Promise<void> => {
+    attaching++;
+    footer.render();
+    try {
+      const placeholders = await attachImages(paths.map((path) => ({ path, label: path })));
+      const quoted = (path: string): string => (/[\s'"\\]/.test(path) ? `'${path.replace(/'/g, `'\\''`)}'` : path);
+      insertAtCursor(placeholders.map((placeholder, i) => placeholder ?? quoted(paths[i]!)));
+    } catch (error) {
+      print(`${style.red(`Could not attach the images: ${sanitize((error as Error).message)}`)}\n`);
+      footer.editor.insert(paths.join(' '));
+    } finally {
+      attaching--;
+      footer.render();
+    }
+  };
   // A question asked while /usage has the screen waits until the user goes back.
   prompter.beforePrompt = async () => {
     await footer.screenFree();
@@ -457,8 +539,10 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
       const hint = compactHint(runtime);
       if (hint) print(`${style.yellow(`! ${hint}`)}\n`);
     });
-  const runTurn = (text: string, activation?: SkillActivation): Promise<void> =>
-    runAgent((signal) => runtime.agent.run(text, signal, activation));
+  const runTurn = (text: string, activation?: SkillActivation, images: ImageBlock[] = []): Promise<void> =>
+    runAgent((signal) => runtime.agent.run(text, signal, activation, images.length > 0 ? { images } : {}));
+  /** A message the user typed, with the images its placeholders name. */
+  const runTyped = (text: string): Promise<void> => runTurn(text, undefined, attached.in(text));
 
   /** Starts what is waiting once nothing runs: background work's news first, then the queue. */
   const afterIdle = (): void => {
@@ -477,7 +561,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
       schedule(() => runCommand(next));
     } else {
       print(echo(next));
-      schedule(() => runTurn(next));
+      schedule(() => runTyped(next));
     }
   };
   const stopWaking = runtime.wakes.onWake(() => setTimeout(afterIdle, 0));
@@ -486,7 +570,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
   const send = (text: string): void => {
     print(echo(text));
     busy?.controller.abort();
-    schedule(() => runTurn(text));
+    schedule(() => runTyped(text));
   };
 
   const sendPending = (): void => {

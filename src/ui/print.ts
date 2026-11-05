@@ -70,18 +70,19 @@ export interface PrintOptions {
 
 /** Provider-specific blocks mean nothing to a reader, and attachments would flood the stream. */
 function publicBlocks(blocks: ContentBlock[]): unknown[] {
-  return blocks.flatMap((block) => {
+  return blocks.flatMap((block): unknown[] => {
     if (block.type === 'opaque') return [];
     if (block.type === 'tool_result' && block.attachments) {
       const { attachments, ...rest } = block;
       return [{ ...rest, attachment_count: attachments.length }];
     }
+    if (block.type === 'image') return [{ type: 'image', media_type: block.mediaType, bytes: Math.floor((block.data.length * 3) / 4) }];
     return [block];
   });
 }
 
 function isTypedPrompt(message: Message): boolean {
-  return message.role === 'user' && message.content.every((block) => block.type === 'text');
+  return message.role === 'user' && message.content.every((block) => block.type === 'text' || block.type === 'image');
 }
 
 async function* readInputLines(): AsyncGenerator<string> {
