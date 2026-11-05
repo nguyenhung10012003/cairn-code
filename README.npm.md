@@ -73,6 +73,8 @@ In a session, `/provider` opens a list of providers: type to narrow it, use `↑
 - **A message waits 3 seconds before it is sent.** Anything you send in that time joins it. `Enter` on an empty line sends at once, and `Esc` brings the message back to edit.
 - **Sending a message while the agent works** stops that work and continues from your new message. **`/queue <message>`** waits its turn instead.
 - **The status line** shows what is running and for how long, background agents and shell commands, queued messages, and the tokens used, such as `⠹ Working 12s · Esc to stop · 2 agents · 1 shell · 3 queued · 45k tokens`.
+- **After each turn,** a line shows its cost, tokens and time next to the session's, such as `▸ Cost: turn $0.42 • session $3.17 | Tokens: turn 48k • session 1.2M | Time: 1m 20s`. Once the context passes 75% of the auto-compact point, a note after each turn suggests `/compact` before you continue.
+- **The input sits between two rules,** and the right end of the status line shows the model and effort level. The terminal window is titled `Cairn · <project folder>`.
 - **Typing `/`** opens a menu of commands that narrows as you type. `↑` `↓` choose, `Enter` runs, `Tab` completes.
 - **Permission prompts** list Yes, Yes and don't ask again, and No. `↑` `↓` and `Enter` choose, `y` `a` `n` answer at once, and `Tab` adds a note for the model to the highlighted answer.
 - **Keys:** `Esc` or `Ctrl+C` stops the running work. `Shift+Tab` changes the permission mode. `Alt+Enter`, or a line ending in `\`, starts a new line. Pasted text keeps its line breaks. `Ctrl+D` on an empty line quits.
@@ -89,7 +91,7 @@ In a session, `/provider` opens a list of providers: type to narrow it, use `↑
 | `/clear`, `/resume`, `/rename` | Start a new conversation, go back to an earlier one, or name this one |
 | `/btw <question>` | Ask a side question without adding it to the conversation |
 | `/cost`, `/context`, `/status` | Tokens and estimated cost, how full the context is, session details |
-| `/usage daily`, `/usage projects`, `/usage sessions` | Saved tokens and estimated cost per day, project or session, like `cairn usage` |
+| `/usage` | Tokens and estimated cost on a screen of their own, in tabs: this session, then per day, project and session, like `cairn usage`. `←` `→` switch tabs and `Esc` goes back. `/usage daily`, `/usage projects` or `/usage sessions` opens on that tab |
 | `/tasks`, `/todos` | Background commands, and the agent's checklist |
 | `/mcp`, `/skills`, `/agents` | MCP servers, skills and agents in use |
 | `/init` | Write a `CAIRN.md` with notes about this project |

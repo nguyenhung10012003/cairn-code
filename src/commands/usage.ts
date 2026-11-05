@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { APP_NAME } from '../config/paths.ts';
 import { groupUsage, isDay, loadUsage, localDay, totalsOf, totalTokens, withinDays } from '../session/usage.ts';
-import type { UsageReportKind, UsageRow, UsageTotals } from '../session/usage.ts';
+import type { SessionUsage, UsageReportKind, UsageRow, UsageTotals } from '../session/usage.ts';
 import { sanitize } from '../ui/render.ts';
 
 export const USAGE_HELP = `Usage: ${APP_NAME} usage [daily|projects|sessions] [options]
@@ -178,8 +178,12 @@ function jsonRow(kind: UsageReportKind, row: UsageRow): Record<string, unknown> 
 
 const HEADINGS: Record<UsageReportKind, string> = { daily: 'Per day', projects: 'Per project', sessions: 'Per session' };
 
-export function usageReport(query: UsageQuery): string {
-  const sessions = withinDays(loadUsage(query.project), query.since, query.until);
+/** The saved sessions a query covers, read once for several reports over the same filters. */
+export function usageSessions(query: Omit<UsageQuery, 'kind' | 'json'>): SessionUsage[] {
+  return withinDays(loadUsage(query.project), query.since, query.until);
+}
+
+export function usageReport(query: UsageQuery, sessions: SessionUsage[] = usageSessions(query)): string {
   const rows = groupUsage(sessions, query.kind);
   const total = totalsOf(sessions.flatMap((session) => session.entries));
   if (query.json) {

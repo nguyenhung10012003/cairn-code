@@ -106,6 +106,8 @@ export class Agent {
   totalCostUsd = 0;
   /** True when some response ran on a model with no known price, so the total is a lower bound. */
   costIsPartial = false;
+  /** Responses that ran on a model with no known price, so the UI can tell which turn had one. */
+  unpricedResponses = 0;
   /** Tokens the most recent request occupied. Null right after compaction. */
   lastContextTokens: number | null = null;
   autoCompactTokens: number | undefined;
@@ -178,6 +180,11 @@ export class Agent {
     const mode = this.options.modeReminder?.();
     if (mode) texts.push(mode);
     return texts.map((text) => ({ type: 'text', text }));
+  }
+
+  /** False when automatic compaction is turned off in the settings. */
+  get autoCompacts(): boolean {
+    return this.options.autoCompact !== false;
   }
 
   /** The tokens above which a conversation is compacted. */
@@ -287,8 +294,12 @@ export class Agent {
    */
   addUsage(usage: Usage, costUsd: number | undefined, model: string): void {
     this.totalUsage = addUsage(this.totalUsage, usage);
-    if (costUsd === undefined) this.costIsPartial = true;
-    else this.totalCostUsd += costUsd;
+    if (costUsd === undefined) {
+      this.costIsPartial = true;
+      this.unpricedResponses++;
+    } else {
+      this.totalCostUsd += costUsd;
+    }
     const spent = contextTokens(usage) + usage.outputTokens + usage.webSearches > 0 || (costUsd ?? 0) > 0;
     if (spent) this.store.appendUsage(this.options.provider.name, model, usage, costUsd);
   }

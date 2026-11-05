@@ -17,7 +17,8 @@ import { splitArguments } from '../skills/skills.ts';
 import type { Skill, SkillActivation } from '../skills/skills.ts';
 import { prepareSkill, SkillError } from '../tools/skill.ts';
 import { modelCommand, providerCommand } from './provider.ts';
-import { parseUsageArgs, usageReport } from './usage.ts';
+import { parseUsageArgs, usageReport, usageSessions } from './usage.ts';
+import type { UsageQuery } from './usage.ts';
 
 export interface CommandResult {
   /** Text to print. */
@@ -39,6 +40,13 @@ export interface PickItem {
   detail?: string;
 }
 
+/** One tab of a tabbed view. */
+export interface TabPage {
+  title: string;
+  /** Plain text lines, worked out the first time the tab is shown. */
+  lines(): string[];
+}
+
 export interface CommandIO {
   /** Asks the user to pick from a list. Returns the chosen index, or null. */
   choose(title: string, options: string[]): Promise<number | null>;
@@ -49,6 +57,11 @@ export interface CommandIO {
   pick?(title: string, items: PickItem[], options?: { initial?: string; allowCustom?: boolean }): Promise<string | null>;
   /** One line of text, or null. With `secret`, what is typed is not shown. Absent where nobody is there to answer. */
   ask?(question: string, options?: { secret?: boolean }): Promise<string | null>;
+  /**
+   * Shows tabs on a screen of their own, starting on `initial`, until the user closes them.
+   * Absent where there is no terminal to draw on.
+   */
+  tabs?(title: string, pages: TabPage[], initial: number): Promise<void>;
   /** Messages to run once the current work is done. Only the interactive session has one. */
   queue?: {
     /** Returns the message's place in the queue. */
@@ -89,6 +102,39 @@ function describeServer(state: McpServerState): string {
   return `  ${state.name.padEnd(16)} ${state.type.padEnd(6)} ${state.scope.padEnd(8)} ${summaries[state.status]}${changed}`;
 }
 
+/**
+ * What this session has spent while the app has been running, and, when the transcript holds a
+ * different total, that total over every run.
+ */
+function sessionSpending(runtime: Runtime): { spent: string[]; saved?: string } {
+  const { totalUsage: usage, totalCostUsd, costIsPartial } = runtime.agent;
+  const cost = `$${totalCostUsd.toFixed(4)}`;
+  const spent = [
+    `Input:        ${formatTokens(usage.inputTokens)}`,
+    `Output:       ${formatTokens(usage.outputTokens)}`,
+    `Cache read:   ${formatTokens(usage.cacheReadTokens)}`,
+    `Cache write:  ${formatTokens(usage.cacheWriteTokens)}`,
+    ...(usage.webSearches > 0 ? [`Web searches: ${formatTokens(usage.webSearches)}`] : []),
+    costIsPartial
+      ? `Estimated:    at least ${cost} (some models have no known price)`
+      : `Estimated:    ${cost} at list prices. Your actual bill is what the Console shows.`,
+  ];
+  // After a resume the transcript holds earlier runs too; after /clear, less than this run.
+  const saved = sessionTotals(runtime.agent.transcriptPath);
+  if (saved === null || (totalTokens(saved.usage) === totalTokens(usage) && Math.abs(saved.costUsd - totalCostUsd) <= 1e-9)) return { spent };
+  return {
+    spent,
+    saved: `Saved for this session over every run: ${formatTokens(totalTokens(saved.usage))} tokens, ${saved.costIsPartial ? 'at least ' : ''}$${saved.costUsd.toFixed(4)}.`,
+  };
+}
+
+const USAGE_TABS: { title: string; kind?: UsageQuery['kind'] }[] = [
+  { title: 'This session' },
+  { title: 'Daily', kind: 'daily' },
+  { title: 'Projects', kind: 'projects' },
+  { title: 'Sessions', kind: 'sessions' },
+];
+
 /** `200k` or `1m`. Undefined when it is out of range or not a number. */
 export function parseTokenCount(text: string): number | undefined {
   const match = /^(\d+(?:\.\d+)?)([km]?)$/i.exec(text.trim());
@@ -121,6 +167,7 @@ const BUILTINS: Record<string, BuiltinCommand> = {
         'Keys: Esc or Ctrl+C interrupts a running turn. Shift+Tab cycles the permission mode. End a line with \\ to continue it.',
         'Typing / lists commands as you type: Up and Down choose, Enter runs, Tab completes, Esc closes the list.',
         'In a permission prompt: Up and Down choose, Enter confirms, Tab adds a note to the answer, Esc says no.',
+        'In /usage: Left and Right switch tabs, Up and Down scroll, Esc goes back to the conversation.',
         'A message waits 3 seconds before it is sent: type more to add to it, Enter on an empty line to send it now, Esc to edit it.',
         'Sending a message while the agent works stops that work and answers the new message. /queue <message> waits its turn instead.',
       );
@@ -160,30 +207,9 @@ const BUILTINS: Record<string, BuiltinCommand> = {
   cost: {
     description: 'Show token usage and estimated cost for this session',
     run: (_args, runtime) => {
-      const { totalUsage: usage, totalCostUsd, costIsPartial } = runtime.agent;
-      const cost = `$${totalCostUsd.toFixed(4)}`;
-      // After a resume the transcript holds earlier runs too; after /clear, less than this run.
-      const saved = sessionTotals(runtime.agent.transcriptPath);
-      const savedLine = saved !== null && (totalTokens(saved.usage) !== totalTokens(usage) || Math.abs(saved.costUsd - totalCostUsd) > 1e-9)
-        ? [
-            '',
-            `Saved for this session over every run: ${formatTokens(totalTokens(saved.usage))} tokens, ${saved.costIsPartial ? 'at least ' : ''}$${saved.costUsd.toFixed(4)}.`,
-            `Reports: /usage daily, /usage projects, /usage sessions.`,
-          ]
-        : [];
-      return {
-        output: [
-          `Input:        ${formatTokens(usage.inputTokens)}`,
-          `Output:       ${formatTokens(usage.outputTokens)}`,
-          `Cache read:   ${formatTokens(usage.cacheReadTokens)}`,
-          `Cache write:  ${formatTokens(usage.cacheWriteTokens)}`,
-          ...(usage.webSearches > 0 ? [`Web searches: ${formatTokens(usage.webSearches)}`] : []),
-          costIsPartial
-            ? `Estimated:    at least ${cost} (some models have no known price)`
-            : `Estimated:    ${cost} at list prices. Your actual bill is what the Console shows.`,
-          ...savedLine,
-        ].join('\n'),
-      };
+      const { spent, saved } = sessionSpending(runtime);
+      const reports = saved ? ['', saved, 'Reports: /usage daily, /usage projects, /usage sessions.'] : [];
+      return { output: [...spent, ...reports].join('\n') };
     },
   },
   model: {
@@ -561,14 +587,33 @@ const BUILTINS: Record<string, BuiltinCommand> = {
     },
   },
   usage: {
-    description: 'Same as /cost. With daily, projects or sessions: saved totals from every session',
-    run: (args, runtime, io) => {
-      if (!args.trim()) return BUILTINS.cost!.run(args, runtime, io);
-      try {
-        return { output: usageReport(parseUsageArgs(splitArguments(args), runtime.context.cwd())) };
-      } catch (error) {
-        return { output: `${(error as Error).message}\nUsage: /usage [daily|projects|sessions] [--project <path>] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--json]` };
+    description: 'Tokens and estimated cost in tabs: this session, daily, projects, sessions',
+    run: async (args, runtime, io) => {
+      let query: UsageQuery | undefined;
+      if (args.trim()) {
+        try {
+          query = parseUsageArgs(splitArguments(args), runtime.context.cwd());
+        } catch (error) {
+          return { output: `${(error as Error).message}\nUsage: /usage [daily|projects|sessions] [--project <path>] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--json]` };
+        }
       }
+      // Without a screen to draw tabs on, and for --json, the text is printed as before.
+      if (!io.tabs || query?.json) return query ? { output: usageReport(query) } : BUILTINS.cost!.run(args, runtime, io);
+      const filters = query ?? { kind: 'daily' as const, json: false };
+      let sessions: ReturnType<typeof usageSessions> | undefined;
+      const pages: TabPage[] = USAGE_TABS.map(({ title, kind }) => ({
+        title,
+        lines: () => {
+          if (!kind) {
+            const { spent, saved } = sessionSpending(runtime);
+            return saved ? [...spent, '', saved] : spent;
+          }
+          sessions ??= usageSessions(filters);
+          return usageReport({ ...filters, kind }, sessions).split('\n');
+        },
+      }));
+      await io.tabs('Usage', pages, query ? USAGE_TABS.findIndex((tab) => tab.kind === query.kind) : 0);
+      return {};
     },
   },
   init: {

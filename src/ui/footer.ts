@@ -25,6 +25,8 @@ export interface FooterOptions {
   prompt: () => string;
   /** The status line, plain text that fits in `width` columns. */
   status: (width: number) => string;
+  /** Plain text at the right end of the status line, such as the model. Left out when the line is too narrow. */
+  statusRight?: () => string;
   /** Lines shown above the prompt, such as a message waiting to be sent. */
   above: (width: number) => string[];
   commands: () => CommandEntry[];
@@ -59,6 +61,10 @@ export class Footer {
   private cursorRow = 0;
   private pasting = false;
   private readonly host: MenuHost;
+  /** While something has the whole screen: what was printed meanwhile, to show once it is back. */
+  private held: string[] | null = null;
+  /** Prompts waiting for the screen to be free. */
+  private readonly waiters: (() => void)[] = [];
 
   constructor(options: FooterOptions) {
     this.options = options;
@@ -115,8 +121,9 @@ export class Footer {
     this.render();
   }
 
-  /** Runs `work` with the footer out of the way. */
+  /** Runs `work` with the footer out of the way, once nothing else has the whole screen. */
   async during<T>(work: () => Promise<T>): Promise<T> {
+    await this.screenFree();
     const was = this.suspended;
     this.suspend();
     try {
@@ -126,8 +133,44 @@ export class Footer {
     }
   }
 
+  /**
+   * Gives the whole screen and the keyboard to `work`, such as a view on the alternate screen.
+   * What is printed meanwhile is held and appears above the footer when `work` is done, and
+   * prompts wait until then.
+   */
+  async takeover<T>(work: () => Promise<T>): Promise<T> {
+    await this.screenFree();
+    const was = this.suspended;
+    this.suspend();
+    this.held = [];
+    try {
+      return await work();
+    } finally {
+      const held = this.held.join('');
+      this.held = null;
+      if (held) stdout.write(held);
+      if (!was) this.resume();
+      for (const wake of this.waiters.splice(0)) wake();
+    }
+  }
+
+  /** Resolves once nothing has the whole screen. */
+  screenFree(): Promise<void> {
+    if (!this.held) return Promise.resolve();
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  /** How many prompts are waiting for the screen. */
+  get waiting(): number {
+    return this.waiters.length;
+  }
+
   /** Prints above the footer. `text` should end with a newline. */
   print(text: string): void {
+    if (this.held) {
+      this.held.push(text);
+      return;
+    }
     if (!this.active || this.suspended) {
       stdout.write(text);
       return;
@@ -144,9 +187,10 @@ export class Footer {
     const above = this.options.above(width).map((line) => clipLine(line, usable));
     const { rows, row, col } = this.layout(usable);
     const menu = this.menu.lines(width);
-    const status = style.dim(clipToWidth(sanitize(this.options.status(usable)), usable));
-    const lines = [...above, ...rows, ...menu, status];
-    const cursorRow = above.length + row;
+    const rule = style.dim('─'.repeat(usable));
+    // A rule above and below the input sets it apart from the output and from the menu and status.
+    const lines = [...above, rule, ...rows, rule, ...menu, this.statusLine(usable)];
+    const cursorRow = above.length + 1 + row;
     const up = lines.length - 1 - cursorRow;
     let out = inSync ? '' : SYNC_START;
     out += this.drawn ? this.eraseSequence() : '\r\x1b[0J';
@@ -156,6 +200,16 @@ export class Footer {
     stdout.write(out);
     this.drawn = true;
     this.cursorRow = cursorRow;
+  }
+
+  /** The status on the left and `statusRight` on the right, while the left keeps room for its start. */
+  private statusLine(usable: number): string {
+    const left = sanitize(this.options.status(usable));
+    const right = sanitize(this.options.statusRight?.() ?? '');
+    const room = usable - displayWidth(right) - 2;
+    if (!right || room < Math.min(displayWidth(left), 24)) return style.dim(clipToWidth(left, usable));
+    const shown = clipToWidth(left, room);
+    return style.dim(`${shown}${' '.repeat(usable - displayWidth(shown) - displayWidth(right))}${right}`);
   }
 
   private eraseSequence(): string {

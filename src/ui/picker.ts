@@ -10,7 +10,7 @@ const ROWS = 10;
 type KeyListener = (text: string | undefined, key: Key | undefined) => void;
 
 /** Takes the keyboard for one widget, and gives it back as it was. */
-function captureKeys(onKey: KeyListener): () => void {
+export function captureKeys(onKey: KeyListener): () => void {
   const stdin = process.stdin;
   emitKeypressEvents(stdin);
   const wasRaw = stdin.isRaw === true;

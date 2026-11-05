@@ -4,12 +4,13 @@
  * stops the current work and answers the newest message instead. /queue holds messages until the
  * current work is done.
  */
+import { basename } from 'node:path';
 import { emitKeypressEvents } from 'node:readline';
 import { createInterface } from 'node:readline';
 import { APP_DISPLAY_NAME, VERSION } from '../config/paths.ts';
 import { commandEntries, parseSlash, runSlashCommand, settleCommand } from '../commands/slash.ts';
-import type { CommandIO, CommandResult } from '../commands/slash.ts';
-import type { AgentEvent } from '../core/agent.ts';
+import type { CommandIO, CommandResult, TabPage } from '../commands/slash.ts';
+import type { Agent, AgentEvent } from '../core/agent.ts';
 import { contextTokens } from '../core/messages.ts';
 import type { Runtime } from '../core/runtime.ts';
 import type { PermissionMode } from '../permissions/engine.ts';
@@ -19,6 +20,7 @@ import { Footer } from './footer.ts';
 import { chooseWithNote, pickFromList, readSecret } from './picker.ts';
 import type { ChoiceOption } from './picker.ts';
 import { clipToWidth, displayWidth, MarkdownStream, permissionPreview, sanitize, style, toolResultSummary, toolSummary } from './render.ts';
+import { showTabs } from './tabs.ts';
 
 const stdin = process.stdin;
 const stdout = process.stdout;
@@ -58,8 +60,8 @@ class LineInput {
 
 class TerminalPrompter implements Prompter {
   private readonly input: LineInput;
-  /** Set by the session: moves the footer out of the way while a question is open. */
-  beforePrompt: () => void = () => {};
+  /** Set by the session: waits for the screen, then moves the footer out of the way while a question is open. */
+  beforePrompt: () => Promise<void> | void = () => {};
   afterPrompt: () => void = () => {};
 
   constructor(input: LineInput) {
@@ -68,7 +70,7 @@ class TerminalPrompter implements Prompter {
 
   /** Runs one whole question with the footer out of the way. */
   private async asking<T>(work: () => Promise<T>): Promise<T> {
-    this.beforePrompt();
+    await this.beforePrompt();
     try {
       return await work();
     } finally {
@@ -208,9 +210,73 @@ function shortCount(count: number): string {
   return `${(count / 1_000_000).toFixed(1)}M`;
 }
 
-function elapsed(since: number): string {
-  const seconds = Math.floor((Date.now() - since) / 1000);
+/** 12s, 1m 05s, 74m 40s. */
+function duration(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+}
+
+function elapsed(since: number): string {
+  return duration(Date.now() - since);
+}
+
+/** $0.0042 under a cent, otherwise $0.42 or $17.29. A + marks a lower bound. */
+function usd(amount: number, partial: boolean): string {
+  return `$${amount > 0 && amount < 0.01 ? amount.toFixed(4) : amount.toFixed(2)}${partial ? '+' : ''}`;
+}
+
+/** What the session has spent so far, to tell what one turn added. */
+interface Spent {
+  tokens: number;
+  costUsd: number;
+  /** Responses from a model with no known price. */
+  unpriced: number;
+}
+
+function spentBy(agent: Agent): Spent {
+  const usage = agent.totalUsage;
+  return { tokens: contextTokens(usage) + usage.outputTokens, costUsd: agent.totalCostUsd, unpriced: agent.unpricedResponses };
+}
+
+/**
+ * The line after a turn, such as `Cost: turn $0.42 • session $3.17 | Tokens: turn 48k • session 1.2M | Time: 1m 20s`.
+ * Subagents and compaction during the turn count toward it. Null when the turn spent nothing,
+ * such as a prompt a hook blocked.
+ */
+function turnSummary(before: Spent, after: Spent, ms: number): string | null {
+  const tokens = after.tokens - before.tokens;
+  const cost = Math.max(0, after.costUsd - before.costUsd);
+  if (tokens <= 0 && cost === 0) return null;
+  const parts: string[] = [];
+  // When nothing in the session has a known price, a cost would only be a misleading $0.00.
+  if (after.costUsd > 0 || after.unpriced === 0) {
+    parts.push(`Cost: turn ${usd(cost, after.unpriced > before.unpriced)} • session ${usd(after.costUsd, after.unpriced > 0)}`);
+  }
+  parts.push(`Tokens: turn ${shortCount(tokens)} • session ${shortCount(after.tokens)}`);
+  parts.push(`Time: ${duration(ms)}`);
+  return parts.join(' | ');
+}
+
+/** Past this share of the auto-compact point, each turn ends with a suggestion to compact. */
+const COMPACT_HINT_FRACTION = 0.75;
+
+/**
+ * A suggestion to compact, once the context is close to where it would be compacted anyway, so
+ * the user can do it at a moment that suits them and say what to keep. Null below that.
+ */
+function compactHint(runtime: Runtime): string | null {
+  const used = runtime.agent.lastContextTokens;
+  const threshold = runtime.agent.autoCompactThreshold;
+  if (used === null || used < threshold * COMPACT_HINT_FRACTION) return null;
+  const window = runtime.provider.contextWindow(runtime.agent.model);
+  const full = `Context is ${Math.round((used / window) * 100)}% full (${shortCount(used)} of ${shortCount(window)} tokens).`;
+  const auto = runtime.agent.autoCompacts ? ` Otherwise it is compacted on its own past ${shortCount(Math.round(threshold))}.` : ' Auto-compact is off.';
+  return `${full} Consider /compact before you continue.${auto}`;
+}
+
+/** `Cairn · my-project`, for the terminal's window or tab. */
+function windowTitle(projectDir: string): string {
+  return `${APP_DISPLAY_NAME} · ${basename(projectDir) || projectDir}`;
 }
 
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -229,6 +295,11 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     return `${mode === 'default' ? '' : style.yellow(`[${mode}] `)}${style.cyan('>')} `;
   };
 
+  if (stdout.isTTY) {
+    // The shell's title goes on the terminal's title stack, where it has one, and comes back on exit.
+    stdout.write(`\x1b[22;0t\x1b]0;${sanitize(windowTitle(runtime.projectDir))}\x07`);
+    process.once('exit', () => stdout.write('\x1b[23;0t'));
+  }
   stdout.write(`${style.bold(APP_DISPLAY_NAME)} ${style.dim(`v${VERSION}  ${runtime.providerName} / ${runtime.agent.model}`)}\n`);
   stdout.write(`${style.dim(`${runtime.projectDir}  -  /help for commands`)}\n`);
   for (const warning of runtime.warnings) stdout.write(`${style.yellow('! ')}${sanitize(warning)}\n`);
@@ -278,6 +349,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
   const footer = new Footer({
     prompt: promptText,
     status: statusLine,
+    statusRight: () => `${runtime.agent.model} · effort ${runtime.agent.effort ?? 'default'}`,
     above: (width) => {
       if (!pending) return [];
       const lines = sanitize(pending.text).split('\n');
@@ -302,7 +374,11 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
   });
   const print = (text: string): void => footer.print(text);
   terminal.print = print;
-  prompter.beforePrompt = () => footer.suspend();
+  // A question asked while /usage has the screen waits until the user goes back.
+  prompter.beforePrompt = async () => {
+    await footer.screenFree();
+    footer.suspend();
+  };
   prompter.afterPrompt = () => footer.resume();
 
   const io: CommandIO = {
@@ -312,6 +388,17 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     },
     pick: (title, items, options) => footer.during(() => pickFromList(title, items, options)),
     ask: (question, options) => footer.during(() => (options?.secret ? readSecret(question) : input.read(question))),
+    ...(stdin.isTTY && stdout.isTTY
+      ? {
+          tabs: (title: string, pages: TabPage[], initial: number) =>
+            footer.takeover(() =>
+              showTabs(title, pages, {
+                initial,
+                notice: () => (footer.waiting > 0 ? 'A question is waiting for your answer. Press Esc to go back to it.' : undefined),
+              }),
+            ),
+        }
+      : {}),
     queue: {
       add: (text) => {
         queue.push(text);
@@ -354,8 +441,24 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     const thinking = new MarkdownStream((chunk) => print(style.dim(chunk)));
     for await (const event of events) renderEvent(event, runtime, md, thinking, print);
   };
+  /** Runs the agent, then sums up what the turn spent and how long it took. */
+  const runAgent = (events: (signal: AbortSignal) => AsyncIterable<AgentEvent>): Promise<void> =>
+    runBusy('Working', async (signal) => {
+      const before = spentBy(runtime.agent);
+      const startedAt = Date.now();
+      try {
+        await streamEvents(events(signal));
+      } catch (error) {
+        print(`${style.red(sanitize((error as Error).message))}\n`);
+      }
+      const summary = turnSummary(before, spentBy(runtime.agent), Date.now() - startedAt);
+      if (!summary) return;
+      print(`\n${style.dim(`▸ ${summary}`)}\n`);
+      const hint = compactHint(runtime);
+      if (hint) print(`${style.yellow(`! ${hint}`)}\n`);
+    });
   const runTurn = (text: string, activation?: SkillActivation): Promise<void> =>
-    runBusy('Working', (signal) => streamEvents(runtime.agent.run(text, signal, activation)));
+    runAgent((signal) => runtime.agent.run(text, signal, activation));
 
   /** Starts what is waiting once nothing runs: background work's news first, then the queue. */
   const afterIdle = (): void => {
@@ -363,7 +466,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     if (runtime.wakes.pending()) {
       const { prompts, notes } = runtime.wakes.take();
       for (const prompt of prompts) schedule(() => runTurn(prompt));
-      if (notes) schedule(() => runBusy('Working', (signal) => streamEvents(runtime.agent.resumeForNotes(signal))));
+      if (notes) schedule(() => runAgent((signal) => runtime.agent.resumeForNotes(signal)));
       return;
     }
     const next = queue.shift();
