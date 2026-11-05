@@ -73,6 +73,10 @@ export interface Settings {
   /** A memory directory the model keeps across sessions of this project. On by default. */
   autoMemoryEnabled?: boolean;
   worktree?: { baseRef?: 'fresh' | 'head' };
+  /** false stops asking npm for a newer version at each start. Read from user settings only. */
+  updateCheck?: boolean;
+  /** Install a newer version in the background as a session starts, rather than only saying there is one. Off by default. Read from user settings only. */
+  autoUpdates?: boolean;
 }
 
 export interface LoadOptions {
@@ -110,6 +114,8 @@ export interface LoadedSettings {
   includeCoAuthoredBy?: boolean;
   autoMemoryEnabled: boolean;
   worktreeBaseRef?: 'fresh' | 'head';
+  updateCheck: boolean;
+  autoUpdates: boolean;
 }
 
 function readJson(path: string, warnings: string[]): Settings | null {
@@ -155,6 +161,8 @@ export function loadSettings(options: LoadOptions): LoadedSettings {
     warnings,
     needsTrust: false,
     autoMemoryEnabled: true,
+    updateCheck: true,
+    autoUpdates: false,
   };
 
   const addRules = (texts: unknown, behavior: RuleBehavior, source: RuleSource, anchor: string): void => {
@@ -207,6 +215,9 @@ export function loadSettings(options: LoadOptions): LoadedSettings {
   if (user) {
     apply(user, 'user', appHome(), true);
     Object.assign(result.enabledPlugins, user.enabledPlugins);
+    // What gets installed on this machine is the user's call, not a project's.
+    if (typeof user.updateCheck === 'boolean') result.updateCheck = user.updateCheck;
+    if (typeof user.autoUpdates === 'boolean') result.autoUpdates = user.autoUpdates;
   }
 
   for (const [path, source] of [

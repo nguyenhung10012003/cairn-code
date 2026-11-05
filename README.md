@@ -99,8 +99,11 @@ cairn --agent reviewer              # run the whole session as one agent
 cairn --plugin-dir ./toolkit        # load a plugin for this run
 cairn doctor                        # check the installation
 cairn usage                         # tokens and estimated cost per day; also: projects, sessions
+cairn update                        # install the latest version
 cairn purge --dry-run               # show the data stored for this project
 ```
+
+**Updates:** each interactive session asks npm for the latest version as it starts, in the background, and prints a line such as `Cairn 0.1.5 is available (you have 0.1.4). Run cairn update to install it.` It says nothing when there is no newer version or npm cannot be reached, and it is skipped with `-p` and when `CI` is set. `cairn update` installs the new version with the package manager Cairn was installed with: `npm install -g`, `bun add -g`, `pnpm add -g` or `yarn global add`. A copy run from source, a standalone binary, an `npx` run or a project's dependency is not updated in place; the message says what to do instead. In the user settings (`~/.cairn/settings.json`), `"updateCheck": false` turns the check off, and `"autoUpdates": true` installs a newer version in the background as a session starts, logged to `~/.cairn/update.log`. The new version runs from the next start. Neither setting is read from a project's settings.
 
 **Flags for scripts (`-p`):** `--input-format stream-json` (one message per line), `--include-partial-messages`, `--replay-user-messages`, `--include-hook-events`, `--json-schema`, `--max-budget-usd`, `--fallback-model`, `--permission-prompt-tool`, `--verbose`. `stream-json` emits `system`, `assistant`, `user` and `result` events, plus `stream_event` when asked.
 
@@ -510,7 +513,7 @@ Every endpoint must validate its input.
 
 **Reading files:** `Read` understands PNG, JPEG, GIF and WebP images (shrunk with `sips` or ImageMagick when too large), PDFs (up to 10 pages are shown whole; longer ones need `pages`, such as `"1-5"`, up to 20 pages per call, and need poppler's `pdftoppm`), and `.ipynb` notebooks. `NotebookEdit` changes one cell at a time.
 
-**Other settings:** `env` sets environment variables, `enabledPlugins` (read from user settings only), `sandbox`, `autoCompact`.
+**Other settings:** `env` sets environment variables, `enabledPlugins` (read from user settings only), `sandbox`, `autoCompact`, `updateCheck` and `autoUpdates` (both read from user settings only; see Updates above).
 
 **Extending:** custom subagents in `.cairn/agents/*.md`, or through `--agents`; see also MCP, Skills and Plugins above.
 

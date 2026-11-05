@@ -40,7 +40,10 @@ cairn -c                             # continue the latest session in this direc
 cairn -r <id or name>                # resume an earlier session
 cairn usage                          # tokens and estimated cost per day; also: projects, sessions
 cairn doctor                         # check the installation
+cairn update                         # install the latest version
 ```
+
+Each session checks npm for a newer version as it starts and says when there is one. `"updateCheck": false` in `~/.cairn/settings.json` turns that off, and `"autoUpdates": true` installs it in the background instead.
 
 Cairn uses an Anthropic API key from the [Console](https://platform.claude.com), or `ANTHROPIC_AUTH_TOKEN`. Instead of exporting it each time, you can save it once with `cairn provider key anthropic`. Cairn does not use a Claude Code login or subscription.
 

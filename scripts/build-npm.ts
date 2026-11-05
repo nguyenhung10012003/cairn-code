@@ -12,7 +12,7 @@
  */
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { VERSION } from '../src/config/paths.ts';
+import { NPM_PACKAGE, VERSION } from '../src/config/paths.ts';
 
 const OUT_DIR = 'dist/npm';
 const SHEBANG = '#!/usr/bin/env node';
@@ -27,6 +27,8 @@ function fail(message: string): never {
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as Record<string, unknown> & { version: string };
 if (pkg.version !== VERSION) fail(`package.json version ${pkg.version} does not match VERSION ${VERSION} in src/config/paths.ts`);
+// Update checks ask npm about NPM_PACKAGE, so it has to be the name this is published under.
+if (pkg.name !== NPM_PACKAGE) fail(`package.json name ${String(pkg.name)} does not match NPM_PACKAGE ${NPM_PACKAGE} in src/config/paths.ts`);
 if (!existsSync(README)) fail(`${README} is missing; it becomes the README on npm.`);
 
 const result = await Bun.build({

@@ -10,6 +10,8 @@ export const LOCAL_INSTRUCTION_FILE = 'CAIRN.local.md';
 /** Checked in order when a directory has no INSTRUCTION_FILE, so existing repos work unchanged. */
 export const FALLBACK_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'];
 export const VERSION = '0.1.4';
+/** The package on npm, which update checks ask about and `cairn update` installs. */
+export const NPM_PACKAGE = 'cairn-code';
 
 export function appHome(): string {
   return process.env.CAIRN_HOME ?? join(homedir(), PROJECT_DIR);

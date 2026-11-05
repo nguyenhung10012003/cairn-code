@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runDoctor, runPurge } from './commands/maintenance.ts';
 import { parseTokenCount } from './commands/slash.ts';
+import { checkForUpdate, runUpdateCommand } from './commands/update.ts';
 import { runUsageCommand } from './commands/usage.ts';
 import { APP_NAME, VERSION } from './config/paths.ts';
 import { loadSettings, SETTING_SOURCES } from './config/settings.ts';
@@ -24,7 +25,7 @@ import { createWorktree, finishWorktree } from './session/worktree.ts';
 import type { Worktree } from './session/worktree.ts';
 import { McpToolPrompter, NonInteractivePrompter, runPrint } from './ui/print.ts';
 import type { OutputFormat } from './ui/print.ts';
-import { sanitize } from './ui/render.ts';
+import { sanitize, style } from './ui/render.ts';
 import { createTerminalPrompter, runRepl } from './ui/repl.ts';
 
 const PIPED_INPUT_WAIT_MS = 1_000;
@@ -92,6 +93,7 @@ Commands:
   plugin                            Validate, install and manage plugins
   doctor                            Check this installation
   usage [daily|projects|sessions]   Tokens and estimated cost from saved sessions
+  update                            Install the latest version
   purge [path]                      Delete a project's saved data from this machine
 `;
 
@@ -169,6 +171,7 @@ async function main(): Promise<number> {
   if (subcommand === 'doctor') return runDoctor(realpathSync(process.cwd()));
   if (subcommand === 'purge') return runPurge(process.argv.slice(3), realpathSync(process.cwd()));
   if (subcommand === 'usage') return runUsageCommand(process.argv.slice(3), realpathSync(process.cwd()));
+  if (subcommand === 'update') return runUpdateCommand(process.argv.slice(3));
   const { values, positionals } = parseArgs({
     args: normalizeOptionalFlags(process.argv.slice(2)),
     allowPositionals: true,
@@ -393,7 +396,19 @@ async function main(): Promise<number> {
         ...(values.verbose ? { verbose: true } : {}),
       });
     }
-    await runRepl(runtime, terminal, prompt.trim() || undefined);
+    // In the background: the session does not wait for npm, and a reply lands above the prompt.
+    const updates = new AbortController();
+    void checkForUpdate({
+      updateCheck: runtime.settings.updateCheck,
+      autoUpdates: runtime.settings.autoUpdates,
+      report: (text) => terminal.print(`${style.cyan(sanitize(text))}\n`),
+      signal: updates.signal,
+    });
+    try {
+      await runRepl(runtime, terminal, prompt.trim() || undefined);
+    } finally {
+      updates.abort();
+    }
     return 0;
   } finally {
     await runtime.shutdown();
