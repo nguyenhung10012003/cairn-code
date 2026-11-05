@@ -174,6 +174,7 @@ Cairn keeps its files in `~/.cairn` (or `CAIRN_HOME`): settings, saved keys, ses
 
 ## Versions
 
+- **0.1.4:** `Ctrl+V` pastes an image from the clipboard on macOS and Linux, and image files dropped on the terminal are attached too, as `[Image #1]` placeholders. `/usage` opens a screen of its own with tabs for this session, days, projects and sessions, switched with `←` `→` and closed with `Esc`. Each turn ends with a line showing its cost, tokens and time next to the session's, and with a note to `/compact` once the context is nearly full. The input sits between two rules, the status line shows the model and effort level on the right, and the terminal window is titled after the project.
 - **0.1.3:** each session now saves its tokens and estimated cost. `cairn usage` reports them per day, `cairn usage projects` per project and `cairn usage sessions` per session, also as `/usage` in a session, and after a resume `/cost` shows what the session spent over every run. This is also the first version on npm with the retries from 0.1.2.
 - **0.1.2:** a failed model request is retried up to 10 times, waiting longer each time (from half a second up to 5 minutes), and a reply that breaks off partway is started over. Each retry is shown as it happens. Releases are now published from GitHub Actions, with npm provenance.
 - **0.1.1:** this README, written for people installing Cairn. The program is the same as in 0.1.0.

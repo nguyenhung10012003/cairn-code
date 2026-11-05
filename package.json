@@ -1,6 +1,6 @@
 {
   "name": "cairn-code",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "A coding agent for the terminal: tools, permissions, sandbox, MCP, skills and plugins, on Anthropic, OpenAI, Ollama or any Chat Completions API.",
   "repository": {
     "type": "git",
