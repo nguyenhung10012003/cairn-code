@@ -28,6 +28,8 @@ export interface CommandResult {
   /** What a skill changes for the turn that `prompt` starts. */
   activation?: SkillActivation;
   exit?: boolean;
+  /** Wipe the terminal, screen and scrollback, as for a fresh start. The interactive session then draws its opening panel again. */
+  clearScreen?: boolean;
   /** Run a compaction, which needs the UI's streaming and interrupt handling. */
   compact?: { focus?: string };
   /** Slow work the user may want to interrupt. The UI runs it, and it leads to another result. */
@@ -176,10 +178,10 @@ const BUILTINS: Record<string, BuiltinCommand> = {
     },
   },
   clear: {
-    description: 'Start a new conversation',
+    description: 'Start a new conversation, on a clear screen',
     run: (_args, runtime) => {
       runtime.newSession();
-      return { output: `Started a new session: ${runtime.agent.sessionId}` };
+      return { output: `Started a new session: ${runtime.agent.sessionId}`, clearScreen: true };
     },
   },
   compact: {

@@ -78,8 +78,10 @@ In a session, `/provider` opens a list of providers: type to narrow it, use `↑
 - **The status line** shows what is running and for how long, background agents and shell commands, queued messages, and the tokens used, such as `⠹ Working 12s · Esc to stop · 2 agents · 1 shell · 3 queued · 45k tokens`.
 - **After each turn,** a line shows its cost, tokens and time next to the session's, such as `▸ Cost: turn $0.42 • session $3.17 | Tokens: turn 48k • session 1.2M | Time: 1m 20s`. Once the context passes 75% of the auto-compact point, a note after each turn suggests `/compact` before you continue.
 - **The input sits between two rules,** and the right end of the status line shows the model and effort level. The terminal window is titled `Cairn · <project folder>`.
+- **A panel opens each session** with the model, directory and git branch, the session id, the permission mode, and the instruction files, MCP servers, skills and plugins loaded. `/clear` wipes the screen and shows it again for the new session.
 - **Typing `/`** opens a menu of commands that narrows as you type. `↑` `↓` choose, `Enter` runs, `Tab` completes.
-- **Permission prompts** list Yes, Yes and don't ask again, and No. `↑` `↓` and `Enter` choose, `y` `a` `n` answer at once, and `Tab` adds a note for the model to the highlighted answer.
+- **Permission prompts** list Yes, Yes and don't ask again, and No. `↑` `↓` and `Enter` choose, `y` `a` `n` answer at once, and `Tab` adds a note for the model to the highlighted answer. An approved prompt is taken off the screen; a refused one stays.
+- **Thinking** shows in a few dimmed lines above the input while it streams, then folds to one line such as `✻ Thought for 12s`.
 - **Images:** `Ctrl+V` pastes the image on the clipboard as `[Image #1]`, and image files dropped on the terminal are attached the same way. Delete the placeholder to leave the image out. On Linux this needs `wl-clipboard` (Wayland) or `xclip` (X11).
 - **Keys:** `Esc` or `Ctrl+C` stops the running work. `Shift+Tab` changes the permission mode. `Alt+Enter`, or a line ending in `\`, starts a new line. Pasted text keeps its line breaks. `Ctrl+D` on an empty line quits.
 
@@ -92,7 +94,7 @@ In a session, `/provider` opens a list of providers: type to narrow it, use `↑
 | `/plan` | Plan mode: the agent only reads, then asks you to approve a plan |
 | `/rewind` | Undo file changes from the last turn, or the last N turns |
 | `/compact` | Summarize the conversation to free up context |
-| `/clear`, `/resume`, `/rename` | Start a new conversation, go back to an earlier one, or name this one |
+| `/clear`, `/resume`, `/rename` | Start a new conversation on a clear screen, go back to an earlier one, or name this one |
 | `/btw <question>` | Ask a side question without adding it to the conversation |
 | `/cost`, `/context`, `/status` | Tokens and estimated cost, how full the context is, session details |
 | `/usage` | Tokens and estimated cost on a screen of their own, in tabs: this session, then per day, project and session, like `cairn usage`. `←` `→` switch tabs and `Esc` goes back. `/usage daily`, `/usage projects` or `/usage sessions` opens on that tab |

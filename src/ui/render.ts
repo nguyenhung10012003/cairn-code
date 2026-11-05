@@ -64,6 +64,49 @@ export function tailToWidth(text: string, width: number): string {
   return `…${out}`;
 }
 
+const SGR = /\x1b\[[0-9;]*m/;
+
+/**
+ * Splits a line into pieces of at most `width` columns, so each piece takes exactly one terminal
+ * row and a block of them can be counted to erase it later. Line breaks split it too, and tabs
+ * become spaces to the next stop of 8. Styling around the whole line, as `style` adds it, goes
+ * around every piece; styling inside the line is dropped.
+ */
+export function wrapToWidth(line: string, width: number): string[] {
+  const usable = Math.max(1, width);
+  const [, open = '', inner = '', close = ''] = new RegExp(`^((?:${SGR.source})*)([\\s\\S]*?)((?:${SGR.source})*)$`).exec(line)!;
+  const plain = inner.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+  const pieces: string[] = [];
+  for (const part of plain.split('\n')) {
+    let current = '';
+    let col = 0;
+    for (const char of part) {
+      if (char === '\t') {
+        let spaces = 8 - (col % 8);
+        if (col + spaces > usable) {
+          pieces.push(current);
+          current = '';
+          col = 0;
+          spaces = Math.min(8, usable);
+        }
+        current += ' '.repeat(spaces);
+        col += spaces;
+        continue;
+      }
+      const w = charWidth(char.codePointAt(0)!);
+      if (col > 0 && col + w > usable) {
+        pieces.push(current);
+        current = '';
+        col = 0;
+      }
+      current += char;
+      col += w;
+    }
+    pieces.push(current);
+  }
+  return pieces.map((piece) => (piece ? `${open}${piece}${close}` : ''));
+}
+
 /**
  * Removes control characters from anything the model or a tool produced. Printed raw, escape
  * sequences in a file or web page could rewrite the screen, or fake a permission prompt.

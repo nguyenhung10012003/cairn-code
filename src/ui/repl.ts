@@ -7,7 +7,7 @@
 import { basename } from 'node:path';
 import { emitKeypressEvents } from 'node:readline';
 import { createInterface } from 'node:readline';
-import { APP_DISPLAY_NAME, VERSION } from '../config/paths.ts';
+import { APP_DISPLAY_NAME } from '../config/paths.ts';
 import { commandEntries, parseSlash, runSlashCommand, settleCommand } from '../commands/slash.ts';
 import type { CommandIO, CommandResult, TabPage } from '../commands/slash.ts';
 import type { Agent, AgentEvent } from '../core/agent.ts';
@@ -22,8 +22,9 @@ import { readClipboardImage } from './clipboard.ts';
 import { Footer } from './footer.ts';
 import { chooseWithNote, pickFromList, readSecret } from './picker.ts';
 import type { ChoiceOption } from './picker.ts';
-import { clipToWidth, displayWidth, MarkdownStream, permissionPreview, sanitize, style, toolResultSummary, toolSummary } from './render.ts';
+import { clipToWidth, displayWidth, MarkdownStream, permissionPreview, sanitize, style, toolResultSummary, toolSummary, wrapToWidth } from './render.ts';
 import { showTabs } from './tabs.ts';
+import { renderWelcome, welcomeRows } from './welcome.ts';
 
 const stdin = process.stdin;
 const stdout = process.stdout;
@@ -61,31 +62,55 @@ class LineInput {
   }
 }
 
+/**
+ * Lines written straight to the terminal that can be taken back afterwards. Each line is wrapped
+ * to fit, so the block's height is known. Once its first row has scrolled into the terminal's
+ * scrollback, it can no longer be reached, and it stays.
+ */
+class ScreenBlock {
+  rows = 0;
+
+  write(line: string): void {
+    const pieces = wrapToWidth(line, (stdout.columns || 80) - 1);
+    stdout.write(`${pieces.join('\n')}\n`);
+    this.rows += pieces.length;
+  }
+
+  /**
+   * Erases the block and the `after` rows written below it since. `tallest` is the most rows the
+   * block and what followed it took up at once: past the screen's height, its top scrolled away.
+   */
+  erase(after: number, tallest: number): boolean {
+    if (!stdout.isTTY || tallest > (stdout.rows || 24)) return false;
+    stdout.write(`\r\x1b[${this.rows + after}A\x1b[0J`);
+    return true;
+  }
+}
+
 class TerminalPrompter implements Prompter {
   private readonly input: LineInput;
-  /** Set by the session: waits for the screen, then moves the footer out of the way while a question is open. */
-  beforePrompt: () => Promise<void> | void = () => {};
-  afterPrompt: () => void = () => {};
+  /**
+   * Set by the session: runs a question with the screen to itself, once nothing else has it.
+   * Anything printed meanwhile waits until it is answered, so it cannot land inside the prompt.
+   */
+  around: <T>(work: () => Promise<T>) => Promise<T> = (work) => work();
 
   constructor(input: LineInput) {
     this.input = input;
   }
 
   /** Runs one whole question with the footer out of the way. */
-  private async asking<T>(work: () => Promise<T>): Promise<T> {
-    await this.beforePrompt();
-    try {
-      return await work();
-    } finally {
-      this.afterPrompt();
-    }
+  private asking<T>(work: () => Promise<T>): Promise<T> {
+    return this.around(work);
   }
 
   permission(prompt: PermissionPrompt): Promise<PermissionAnswer> {
     return this.asking(async () => {
-      stdout.write(`\n${style.yellow(style.bold(`${prompt.toolName} needs your approval`))}\n`);
-      for (const line of permissionPreview(prompt.toolName, prompt.input)) stdout.write(`${line}\n`);
-      stdout.write(`${style.dim(sanitize(prompt.reason))}\n`);
+      const block = new ScreenBlock();
+      block.write('');
+      block.write(style.yellow(style.bold(`${prompt.toolName} needs your approval`)));
+      for (const line of permissionPreview(prompt.toolName, prompt.input)) block.write(line);
+      block.write(style.dim(sanitize(prompt.reason)));
       const canAlways = !prompt.forced && prompt.suggestions.length > 0;
       const rules = prompt.suggestions.map((suggestion) => suggestion.rule).join(', ');
       const where = prompt.suggestions.some((suggestion) => suggestion.persist) ? 'saved for this project' : 'for this session';
@@ -93,7 +118,7 @@ class TerminalPrompter implements Prompter {
       // A rule too long for the option line is shown in full above it.
       if (canAlways && displayWidth(alwaysLabel) > (stdout.columns || 80) - 6) {
         for (const suggestion of prompt.suggestions) {
-          stdout.write(style.dim(`  don't ask again would add: ${sanitize(suggestion.rule)} (${suggestion.persist ? 'saved for this project' : 'this session'})\n`));
+          block.write(style.dim(`  don't ask again would add: ${sanitize(suggestion.rule)} (${suggestion.persist ? 'saved for this project' : 'this session'})`));
         }
       }
       if (!stdin.isTTY || !stdout.isTTY) return this.typedPermission(canAlways);
@@ -106,6 +131,16 @@ class TerminalPrompter implements Prompter {
       ];
       const choice = await chooseWithNote(options.map((entry) => entry.option), { cancelIndex: options.length - 1 });
       const answer = options[choice.index]!.answer;
+      if (answer.behavior === 'allow') {
+        // The call's line above and its result below say enough, so an approval leaves the
+        // prompt off the screen. The picker drew its options and hint below the block, and left
+        // one line with the answer.
+        // A note goes into the call's result, which shows it. A new rule is shown nowhere else.
+        const erased = block.erase(1, block.rows + options.length + 1);
+        if (erased && answer.always) {
+          stdout.write(`${style.dim(clipToWidth(`  ✓ Approved; won't ask again for ${sanitize(rules)} (${where})`, (stdout.columns || 80) - 1))}\n`);
+        }
+      }
       return choice.note ? { ...answer, feedback: choice.note } : answer;
     });
   }
@@ -166,8 +201,56 @@ export function createTerminalPrompter(): Terminal {
   return terminal;
 }
 
-function renderEvent(event: AgentEvent, runtime: Runtime, md: MarkdownStream, thinking: MarkdownStream, print: (text: string) => void): void {
-  if (event.type !== 'thinking_delta') thinking.flush();
+/** Rows of thinking shown above the input while it streams. */
+const THINKING_ROWS = 5;
+/** Enough of the latest thinking to fill those rows, however it wraps. */
+const THINKING_TAIL_CHARS = 4_000;
+
+/**
+ * The model's thinking, while it arrives: its last few rows above the input, redrawn with the
+ * footer. When the thinking ends, the rows go and one line says how long it took, so the
+ * conversation keeps the answers and the work, not the reasoning.
+ */
+class ThinkingView {
+  private tail = '';
+  private startedAt: number | null = null;
+  private readonly changed: () => void;
+  private readonly print: (text: string) => void;
+
+  constructor(changed: () => void, print: (text: string) => void) {
+    this.changed = changed;
+    this.print = print;
+  }
+
+  push(text: string): void {
+    this.startedAt ??= Date.now();
+    this.tail = (this.tail + sanitize(text)).slice(-THINKING_TAIL_CHARS);
+    this.changed();
+  }
+
+  /** Replaces the rows with a line saying how long the model thought. Does nothing when it was not thinking. */
+  finish(): void {
+    if (this.startedAt === null) return;
+    const ms = Date.now() - this.startedAt;
+    this.tail = '';
+    this.startedAt = null;
+    this.print(`${style.dim(`✻ Thought for ${ms < 1000 ? 'less than a second' : duration(ms)}`)}\n`);
+  }
+
+  lines(width: number): string[] {
+    if (this.startedAt === null) return [];
+    const room = width - 3;
+    const rows: string[] = [];
+    const lines = this.tail.split('\n');
+    for (let i = lines.length - 1; i >= 0 && rows.length < THINKING_ROWS; i--) {
+      if (lines[i]!.trim()) rows.unshift(...wrapToWidth(lines[i]!.trimEnd(), room));
+    }
+    return [style.dim('✻ Thinking…'), ...rows.slice(-THINKING_ROWS).map((row) => style.dim(`  ${row}`))];
+  }
+}
+
+function renderEvent(event: AgentEvent, runtime: Runtime, md: MarkdownStream, thinking: ThinkingView, print: (text: string) => void): void {
+  if (event.type !== 'thinking_delta') thinking.finish();
   switch (event.type) {
     case 'text_delta':
       md.push(event.text);
@@ -303,14 +386,12 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     stdout.write(`\x1b[22;0t\x1b]0;${sanitize(windowTitle(runtime.projectDir))}\x07`);
     process.once('exit', () => stdout.write('\x1b[23;0t'));
   }
-  stdout.write(`${style.bold(APP_DISPLAY_NAME)} ${style.dim(`v${VERSION}  ${runtime.providerName} / ${runtime.agent.model}`)}\n`);
-  stdout.write(`${style.dim(`${runtime.projectDir}  -  /help for commands`)}\n`);
+  /** The opening panel, worked out again each time it is drawn, since /clear changes the session. */
+  const welcome = (): string => `${renderWelcome(welcomeRows(runtime), stdout.columns || 80).join('\n')}\n`;
+  stdout.write(welcome());
   for (const warning of runtime.warnings) stdout.write(`${style.yellow('! ')}${sanitize(warning)}\n`);
   if (runtime.engine.mode === 'bypassPermissions') {
     stdout.write(`${style.red('! bypassPermissions: tools run without asking. Use this only in an isolated environment.')}\n`);
-  }
-  if (runtime.agent.messages.length > 0) {
-    stdout.write(`${style.dim(`Resumed session with ${runtime.agent.messages.length} messages.`)}\n`);
   }
   stdout.write('\n');
 
@@ -353,15 +434,22 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     return parts.join(' · ');
   };
 
+  // One for the session: the footer draws whichever turn is thinking now.
+  const thinking = new ThinkingView(
+    () => footer.render(),
+    (text) => print(text),
+  );
+
   const footer = new Footer({
     prompt: promptText,
     status: statusLine,
     statusRight: () => `${runtime.agent.model} · effort ${runtime.agent.effort ?? 'default'}`,
     above: (width) => {
-      if (!pending) return [];
+      const thought = thinking.lines(width);
+      if (!pending) return thought;
       const lines = sanitize(pending.text).split('\n');
       const shown = lines.slice(0, 3).map((line, i) => style.dim(clipToWidth(`${i === 0 ? '⏳ ' : '   '}${line}`, width - 1)));
-      return lines.length > 3 ? [...shown, style.dim('   …')] : shown;
+      return [...thought, ...shown, ...(lines.length > 3 ? [style.dim('   …')] : [])];
     },
     commands: () => commandEntries(runtime),
     onSubmit: (text) => submit(text),
@@ -456,12 +544,9 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
       footer.render();
     }
   };
-  // A question asked while /usage has the screen waits until the user goes back.
-  prompter.beforePrompt = async () => {
-    await footer.screenFree();
-    footer.suspend();
-  };
-  prompter.afterPrompt = () => footer.resume();
+  // A question asked while /usage has the screen waits until the user goes back, and what is
+  // printed while one is open waits for its answer, so an approved prompt can be erased whole.
+  prompter.around = (work) => footer.takeover(work);
 
   const io: CommandIO = {
     choose: async (title, options) => {
@@ -520,8 +605,12 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
 
   const streamEvents = async (events: AsyncIterable<AgentEvent>): Promise<void> => {
     const md = new MarkdownStream(print);
-    const thinking = new MarkdownStream((chunk) => print(style.dim(chunk)));
-    for await (const event of events) renderEvent(event, runtime, md, thinking, print);
+    try {
+      for await (const event of events) renderEvent(event, runtime, md, thinking, print);
+    } finally {
+      // A stream that broke off during thinking still folds it away.
+      thinking.finish();
+    }
   };
   /** Runs the agent, then sums up what the turn spent and how long it took. */
   const runAgent = (events: (signal: AbortSignal) => AsyncIterable<AgentEvent>): Promise<void> =>
@@ -616,7 +705,10 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
       print(`${style.red(sanitize((error as Error).message))}\n`);
       return;
     }
-    if (result.output) print(`${sanitize(result.output)}\n`);
+    // The screen, then the scrollback (which some terminals fill with what the first wipe
+    // removed), then the cursor to the top. The panel says which session this now is.
+    if (result.clearScreen) print(`\x1b[2J\x1b[3J\x1b[H${welcome()}\n`);
+    else if (result.output) print(`${sanitize(result.output)}\n`);
     if (result.exit) return exit();
     if (result.compact) {
       const focus = result.compact.focus;
