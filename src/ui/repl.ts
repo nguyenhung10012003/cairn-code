@@ -8,7 +8,7 @@ import { basename } from 'node:path';
 import { emitKeypressEvents } from 'node:readline';
 import { createInterface } from 'node:readline';
 import { APP_DISPLAY_NAME } from '../config/paths.ts';
-import { commandEntries, parseSlash, runSlashCommand, settleCommand } from '../commands/slash.ts';
+import { commandEntries, isCommandLine, parseSlash, runSlashCommand, settleCommand } from '../commands/slash.ts';
 import type { CommandIO, CommandResult, TabPage } from '../commands/slash.ts';
 import type { Agent, AgentEvent } from '../core/agent.ts';
 import { contextTokens } from '../core/messages.ts';
@@ -17,7 +17,7 @@ import type { Runtime } from '../core/runtime.ts';
 import type { PermissionMode } from '../permissions/engine.ts';
 import type { SkillActivation } from '../skills/skills.ts';
 import type { PermissionAnswer, PermissionPrompt, Prompter, UserQuestion } from '../tools/types.ts';
-import { AttachedImages, droppedImagePaths, loadImage, markPlaceholders, PLACEHOLDER_AT_END } from './attachments.ts';
+import { AttachedImages, droppedImagePaths, loadImage, markPlaceholders, PastedTexts, PLACEHOLDER_AT_END } from './attachments.ts';
 import { readClipboardImage } from './clipboard.ts';
 import { Footer } from './footer.ts';
 import { chooseWithNote, pickFromList, readSecret } from './picker.ts';
@@ -407,6 +407,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
   let frame = 0;
   let quitHinted = false;
   const attached = new AttachedImages();
+  const pasted = new PastedTexts();
   /** Images being read or shrunk, whose placeholders are not on the line yet. */
   let attaching = 0;
   let resolveExit!: () => void;
@@ -469,9 +470,12 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     onPasteImage: (quiet) => void pasteImage(quiet),
     onPaste: (text) => {
       const paths = droppedImagePaths(text);
-      if (!paths) return false;
-      void attachFiles(paths);
-      return true;
+      if (paths) {
+        void attachFiles(paths);
+        return '';
+      }
+      // Placed exactly where the text was, with no spaces added, so sending gives back the same message.
+      return PastedTexts.isLong(text) ? pasted.add(text) : undefined;
     },
   });
   footer.editor.atomic = PLACEHOLDER_AT_END;
@@ -504,7 +508,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     return placeholders;
   };
 
-  /** Ctrl+V: the picture on the clipboard. */
+  /** The paste key (Cmd+V on macOS, Ctrl+V elsewhere) or Ctrl+V: the picture on the clipboard. */
   const pasteImage = async (quiet: boolean): Promise<void> => {
     attaching++;
     footer.render();
@@ -630,8 +634,11 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     });
   const runTurn = (text: string, activation?: SkillActivation, images: ImageBlock[] = []): Promise<void> =>
     runAgent((signal) => runtime.agent.run(text, signal, activation, images.length > 0 ? { images } : {}));
-  /** A message the user typed, with the images its placeholders name. */
-  const runTyped = (text: string): Promise<void> => runTurn(text, undefined, attached.in(text));
+  /**
+   * A message the user typed, with its pastes back in full and the images its placeholders name.
+   * Only the model gets the full text: the conversation on screen keeps the placeholders.
+   */
+  const runTyped = (text: string): Promise<void> => runTurn(pasted.expand(text), undefined, attached.in(text));
 
   /** Starts what is waiting once nothing runs: background work's news first, then the queue. */
   const afterIdle = (): void => {
@@ -645,7 +652,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     const next = queue.shift();
     if (next === undefined) return;
     footer.render();
-    if (next.startsWith('/')) {
+    if (isCommandLine(next, runtime)) {
       print(echo(next));
       schedule(() => runCommand(next));
     } else {
@@ -694,7 +701,10 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
   const runCommand = async (text: string): Promise<void> => {
     let result: CommandResult;
     try {
-      result = await runSlashCommand(text, runtime, io);
+      // A command gets the pastes in full, such as /btw or a skill's arguments. /queue keeps the
+      // placeholders, so a queued message shows short when it runs and is expanded then.
+      const full = parseSlash(text)?.name === 'queue' ? text : pasted.expand(text);
+      result = await runSlashCommand(full, runtime, io);
       if (result.run) {
         const started = result;
         // Deferred work can run injected commands or wait on a browser, so it can be stopped.
@@ -751,8 +761,9 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
       if (pending) sendPending();
       return;
     }
-    if (text.startsWith('/') && !pending) return command(text);
-    if (text.startsWith('/')) {
+    const isCommand = isCommandLine(text, runtime);
+    if (isCommand && !pending) return command(text);
+    if (isCommand) {
       // A command is not part of the waiting message; that message goes first.
       sendPending();
       return command(text);

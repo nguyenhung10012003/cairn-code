@@ -2,7 +2,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { backgroundLogDir, credentialsPath, fileHistoryDir, sessionsDir, trustFilePath, VERSION } from '../config/paths.ts';
+import { backgroundLogDir, credentialsPath, fileHistoryDir, sessionsDir, trustFilePath, VERSION, workspaceDir } from '../config/paths.ts';
+import { legacyMemoryDir } from '../config/workspace.ts';
 import { DEFAULT_PROVIDER, keySource, PROVIDER_TYPES, providerTypeName } from '../providers/index.ts';
 import { loadSettings } from '../config/settings.ts';
 import { isTrusted } from '../config/trust.ts';
@@ -50,6 +51,8 @@ export function runDoctor(cwd: string): number {
   }
 
   check('This directory', trusted ? 'trusted' : settings.needsTrust ? 'not trusted, and it has settings that wait for trust' : 'not trusted');
+  const workspace = workspaceDir(cwd);
+  check('Workspace folder', existsSync(workspace) ? workspace : `${workspace} (created by the first session here)`);
   check('Settings', settings.warnings.length === 0 ? 'no problems' : `${settings.warnings.length} problem(s)`, settings.warnings.length === 0);
   for (const warning of settings.warnings) lines.push(`    ${sanitize(warning)}`);
 
@@ -73,9 +76,10 @@ export function runDoctor(cwd: string): number {
 }
 
 function pathsToPurge(project: string): string[] {
+  const paths = [workspaceDir(project), legacyMemoryDir(project)].filter((path) => existsSync(path));
   const dir = sessionsDir(project);
-  if (!existsSync(dir)) return [];
-  const paths = [dir];
+  if (!existsSync(dir)) return paths;
+  paths.push(dir);
   for (const file of readdirSync(dir)) {
     if (!file.endsWith('.jsonl')) continue;
     const id = file.replace(/\.jsonl$/, '');
@@ -86,7 +90,8 @@ function pathsToPurge(project: string): string[] {
   return paths;
 }
 
-const PURGE_USAGE = "Usage: cairn purge [path] [--dry-run] [--yes]\nDeletes this machine's transcripts, file history and logs for a project, and its trust entry. The project's own files are not touched.\n";
+const PURGE_USAGE =
+  "Usage: cairn purge [path] [--dry-run] [--yes]\nDeletes this machine's data for a project: its workspace folder (settings, saved approvals, MCP servers and memory), transcripts, file history and logs, and its trust entry. The project's own files, .cairn/ included, are not touched.\n";
 
 /** Deletes data that cannot be recovered, so it says exactly what first and needs --yes to act. */
 export function runPurge(args: string[], cwd: string): number {

@@ -36,8 +36,9 @@ import type { Effort, JsonSchema, ModelProvider, ProviderConfig, SystemBlock } f
 import { buildSystemPrompt } from './system-prompt.ts';
 import type { PromptAgent } from './system-prompt.ts';
 import { WakeQueue } from './wakes.ts';
-import { APP_DISPLAY_NAME, appHome, backgroundLogDir, PROJECT_DIR } from '../config/paths.ts';
+import { APP_DISPLAY_NAME, appHome, backgroundLogDir, PROJECT_DIR, workspaceMemoryDir } from '../config/paths.ts';
 import { appendLocalAllowRule, loadSettings } from '../config/settings.ts';
+import { ensureWorkspaceDir } from '../config/workspace.ts';
 import type { HooksConfig, LoadedSettings, SettingSource } from '../config/settings.ts';
 import { isTrusted } from '../config/trust.ts';
 import { HookRunner } from '../hooks/runner.ts';
@@ -488,10 +489,13 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     },
   });
 
+  // The project's workspace folder, which also moves in what earlier versions kept elsewhere.
+  if (persist && !restricted) warnings.push(...ensureWorkspaceDir(projectDir));
+
   // A memory directory the model keeps across sessions, and a scratch directory for this one.
-  // Kept out of the transcript directory so a session's files stay only its transcript.
+  // Kept in the workspace folder, so a session's files stay only its transcript.
   const memoryEnabled = settings.autoMemoryEnabled && persist && !bare && !safe && !restricted;
-  const memoryDir = join(appHome(), 'memory', projectDir.replace(/[^a-zA-Z0-9]/g, '-'));
+  const memoryDir = workspaceMemoryDir(projectDir);
   if (memoryEnabled) {
     mkdirSync(memoryDir, { recursive: true, mode: 0o700 });
     engine.addRule(`Edit(/${canonicalize(memoryDir)}/**)`, 'allow', 'session');

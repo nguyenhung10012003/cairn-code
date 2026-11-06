@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
-import { INSTRUCTION_FILE, PROJECT_DIR } from '../config/paths.ts';
+import { appHome, INSTRUCTION_FILE, PROJECT_DIR } from '../config/paths.ts';
 import { analyzeShell } from '../permissions/shell.ts';
 import { matchBashPattern } from '../permissions/rules.ts';
 import { startProxy } from './proxy.ts';
@@ -255,7 +255,8 @@ export async function createSandbox(settings: SandboxSettings, options: SandboxO
   const tempDirs = [real(tmpdir()), real('/tmp'), real(process.env.TMPDIR ?? tmpdir())];
   const policy = (): PolicyInput => ({
     writable: [...new Set([...options.workingDirs().map(real), ...tempDirs, ...(settings.filesystem?.allowWrite ?? []).map((path) => expandPath(path, options.cwd))])],
-    denyWrite: (settings.filesystem?.denyWrite ?? []).map((path) => expandPath(path, options.cwd)),
+    // Settings there apply without trust, so a command must not write them even from a working directory above them.
+    denyWrite: [real(join(appHome(), 'workspaces')), ...(settings.filesystem?.denyWrite ?? []).map((path) => expandPath(path, options.cwd))],
     denyRead: (settings.filesystem?.denyRead ?? []).map((path) => expandPath(path, options.cwd)),
     allowRead: (settings.filesystem?.allowRead ?? []).map((path) => expandPath(path, options.cwd)),
     proxyPort: proxy?.port ?? null,

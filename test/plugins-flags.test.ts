@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { beforeEach, describe, it } from 'bun:test';
 import { parseTokenCount, runSlashCommand } from '../src/commands/slash.ts';
+import { workspaceSettingsPath } from '../src/config/paths.ts';
 import { createRuntime } from '../src/core/runtime.ts';
 import type { Runtime, RuntimeOptions } from '../src/core/runtime.ts';
 import { HookRunner } from '../src/hooks/runner.ts';
@@ -832,7 +833,7 @@ describe('slash commands', () => {
     const { runtime } = await start(dir, []);
     assert.match(await slash(runtime, '/sandbox'), /Sandbox: off/);
     assert.match(await slash(runtime, '/sandbox on'), /Restart/);
-    assert.equal((JSON.parse(readFileSync(join(dir, '.cairn/settings.local.json'), 'utf8')) as { sandbox: { enabled: boolean } }).sandbox.enabled, true);
+    assert.equal((JSON.parse(readFileSync(workspaceSettingsPath(dir), 'utf8')) as { sandbox: { enabled: boolean } }).sandbox.enabled, true);
     assert.match(await slash(runtime, '/sandbox maybe'), /Usage/);
     await runtime.shutdown();
   });

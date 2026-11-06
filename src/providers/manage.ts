@@ -4,6 +4,7 @@ import { deleteKey, saveKey } from '../config/credentials.ts';
 import { userSettingsPath } from '../config/paths.ts';
 import { settingsPathFor, updateSettingsFile } from '../config/settings.ts';
 import type { SettingsScope } from '../config/settings.ts';
+import { ensureWorkspaceDir } from '../config/workspace.ts';
 import type { ModelProvider, ProviderConfig } from '../core/provider.ts';
 import { BUILTIN_PROVIDERS, createProvider, describeKeySource, keySource, PROVIDER_NAME, PROVIDER_TYPES, providerNames, providerTypeName } from './index.ts';
 
@@ -84,6 +85,7 @@ export function keyWarning(config: ProviderConfig, type: string): string | undef
 /** Adds, replaces or (with null) removes `providers.<name>` in one settings file. */
 export function writeProviderConfig(scope: SettingsScope, cwd: string, name: string, config: ProviderConfig | null): string {
   const path = settingsPathFor(scope, cwd);
+  if (scope === 'local') ensureWorkspaceDir(cwd);
   updateSettingsFile(path, (settings) => {
     const providers = (settings.providers && typeof settings.providers === 'object' ? settings.providers : {}) as Record<string, unknown>;
     if (config) providers[name] = config;

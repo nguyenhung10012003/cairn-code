@@ -35,7 +35,8 @@ const USAGE = `Usage: ${APP_NAME} provider <command>
           --no-key                      Do not ask for a key
           --context-window <tokens>     For a model the provider does not know
           --max-output-tokens <tokens>  openai-chat: the most to ask for in a response
-      -s, --scope <user|project|local>  Default: user. Keys are only saved for you, never in these files
+      -s, --scope <user|project|local>  Default: user. local is this project, only you, outside the repository.
+                                        Keys are only saved for you, never in these files
   key <name> [--stdin | --delete]       Save, replace or delete a provider's key
   use <name> [-m <model>]               Make it the default for new sessions
   remove <name> [-s scope]              Remove a provider and its saved key

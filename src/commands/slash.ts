@@ -2,8 +2,10 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { APP_DISPLAY_NAME, INSTRUCTION_FILE, localSettingsPath, userSettingsPath } from '../config/paths.ts';
+import { APP_DISPLAY_NAME, INSTRUCTION_FILE, projectLocalSettingsPath, projectSettingsPath, userSettingsPath, workspaceSettingsPath } from '../config/paths.ts';
+import { updateSettingsFile } from '../config/settings.ts';
 import { markTrusted } from '../config/trust.ts';
+import { ensureWorkspaceDir } from '../config/workspace.ts';
 import { renderTranscript } from '../core/compaction.ts';
 import { textOf } from '../core/messages.ts';
 import type { Effort } from '../core/provider.ts';
@@ -16,6 +18,7 @@ import { sessionTotals, totalTokens } from '../session/usage.ts';
 import { splitArguments } from '../skills/skills.ts';
 import type { Skill, SkillActivation } from '../skills/skills.ts';
 import { prepareSkill, SkillError } from '../tools/skill.ts';
+import { pasteImageKey } from '../ui/clipboard.ts';
 import { modelCommand, providerCommand } from './provider.ts';
 import { parseUsageArgs, usageReport, usageSessions } from './usage.ts';
 import type { UsageQuery } from './usage.ts';
@@ -170,7 +173,9 @@ const BUILTINS: Record<string, BuiltinCommand> = {
         'Typing / lists commands as you type: Up and Down choose, Enter runs, Tab completes, Esc closes the list.',
         'In a permission prompt: Up and Down choose, Enter confirms, Tab adds a note to the answer, Esc says no.',
         'In /usage: Left and Right switch tabs, Up and Down scroll, Esc goes back to the conversation.',
-        'Ctrl+V pastes an image from the clipboard as [Image #1], and an image file dropped on the terminal is attached the same way. Delete the placeholder to leave the image out.',
+        `${pasteImageKey()} pastes an image from the clipboard as [Image #1], and an image file dropped on the terminal is attached the same way. Delete the placeholder to leave the image out.`,
+        ...(process.platform === 'darwin' ? ['Ctrl+V pastes an image too, for a terminal whose Cmd+V pastes only text, such as iTerm2 before 3.7.'] : []),
+        'A paste of more than 3 lines or 800 characters shows as [Pasted text #1 +42 lines], and goes in full with the message.',
         'A message waits 3 seconds before it is sent: type more to add to it, Enter on an empty line to send it now, Esc to edit it.',
         'Sending a message while the agent works stops that work and answers the new message. /queue <message> waits its turn instead.',
       );
@@ -460,7 +465,8 @@ const BUILTINS: Record<string, BuiltinCommand> = {
             `autoCompact: ${settings.autoCompact}`,
             `defaultMode: ${settings.defaultMode}`,
             `User settings: ${userSettingsPath()}`,
-            `Local settings: ${localSettingsPath(runtime.projectDir)}`,
+            `Workspace settings: ${workspaceSettingsPath(runtime.projectDir)}`,
+            `Overridden by: ${projectSettingsPath(runtime.projectDir)}, ${projectLocalSettingsPath(runtime.projectDir)}`,
           ].join('\n'),
         };
       }
@@ -563,11 +569,12 @@ const BUILTINS: Record<string, BuiltinCommand> = {
     description: 'Show the sandbox. Also: /sandbox on, /sandbox off, which take effect on the next start',
     run: (args, runtime) => {
       if (args === 'on' || args === 'off') {
-        const path = localSettingsPath(runtime.projectDir);
-        const current = existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as { sandbox?: Record<string, unknown> }) : {};
-        current.sandbox = { ...current.sandbox, enabled: args === 'on' };
-        mkdirSync(dirname(path), { recursive: true });
-        writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
+        ensureWorkspaceDir(runtime.projectDir);
+        const path = workspaceSettingsPath(runtime.projectDir);
+        updateSettingsFile(path, (current) => {
+          const sandbox = current.sandbox && typeof current.sandbox === 'object' ? current.sandbox : {};
+          current.sandbox = { ...sandbox, enabled: args === 'on' };
+        });
         return { output: `Sandbox ${args} in ${path}. Restart to apply it.` };
       }
       if (args) return { output: 'Usage: /sandbox [on|off]' };
@@ -696,6 +703,18 @@ export function resolveExtensionCommand(name: string, args: string, runtime: Run
     };
   }
   return null;
+}
+
+/**
+ * Whether a typed line is a command rather than a message. A line starting with a slash is one,
+ * unless its first word goes on with more slashes and names no command: that word is a path, as
+ * in `/Users/me/notes.md what is in here`, and the line is a message. A nested project's skill
+ * such as /packages/web:deploy has slashes in its name and stays a command.
+ */
+export function isCommandLine(line: string, runtime: Runtime): boolean {
+  if (!line.trim().startsWith('/')) return false;
+  const name = parseSlash(line)?.name;
+  return !name || !name.includes('/') || resolveExtensionCommand(name, '', runtime) !== null;
 }
 
 export function parseSlash(line: string): { name: string; args: string } | null {

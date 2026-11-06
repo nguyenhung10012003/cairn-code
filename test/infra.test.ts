@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, it } from 'bun:test';
 import { commandNames, runSlashCommand, settleCommand } from '../src/commands/slash.ts';
+import { workspaceSettingsPath } from '../src/config/paths.ts';
 import { appendLocalAllowRule, loadSettings } from '../src/config/settings.ts';
 import { isTrusted, markTrusted } from '../src/config/trust.ts';
 import { danglingToolResults } from '../src/core/messages.ts';
@@ -315,11 +316,12 @@ describe('settings and trust', () => {
     assert.equal(loadSettings({ cwd: dir, trusted: true }).warnings.length, 3);
   });
 
-  it('saves an always-allow rule once, in a private file', () => {
+  it('saves an always-allow rule once, in a private file outside the repository', () => {
     const dir = project();
     appendLocalAllowRule(dir, 'Bash(x)');
     appendLocalAllowRule(dir, 'Bash(x)');
-    const path = join(dir, '.cairn/settings.local.json');
+    const path = workspaceSettingsPath(dir);
+    assert.equal(existsSync(join(dir, '.cairn')), false);
     assert.deepEqual((JSON.parse(readFileSync(path, 'utf8')) as { permissions: { allow: string[] } }).permissions.allow, ['Bash(x)']);
     assert.equal(statSync(path).mode & 0o777, 0o600);
   });

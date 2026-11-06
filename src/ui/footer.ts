@@ -40,12 +40,17 @@ export interface FooterOptions {
   onEof: () => void;
   onShiftTab: () => void;
   /**
-   * Ctrl+V, or a paste with nothing in it, which is what some terminals send when the clipboard
-   * holds a picture. `quiet` for the empty paste, which should say nothing when there is no image.
+   * A paste with nothing in it, which is what a terminal sends for its paste key (Cmd+V on macOS,
+   * Ctrl+V on Windows) when the clipboard holds a picture and no text. Also Ctrl+V when it reaches
+   * the program as a key, as on Linux or in a terminal that sends nothing for a picture. `quiet`
+   * for the empty paste, which should say nothing when there is no image.
    */
   onPasteImage?: (quiet: boolean) => void;
-  /** A paste was typed in. Returning true takes it back out of the line, for the caller to handle. */
-  onPaste?: (text: string) => boolean;
+  /**
+   * A paste was typed in. What this returns takes its place on the line, such as a placeholder,
+   * or an empty string for the caller to handle it; undefined leaves the paste as it is.
+   */
+  onPaste?: (text: string) => string | undefined;
 }
 
 function stripAnsi(text: string): string {
@@ -304,7 +309,13 @@ export class Footer {
       // The cursor only moves forward while a paste is inserted, so what it passed is the paste.
       const pasted = [...this.editor.text].slice(this.pasteStart, this.editor.cursor).join('');
       if (!pasted) this.options.onPasteImage?.(true);
-      else if (this.options.onPaste?.(pasted)) this.editor.removeRange(this.pasteStart, this.editor.cursor);
+      else {
+        const replacement = this.options.onPaste?.(pasted);
+        if (replacement !== undefined) {
+          this.editor.removeRange(this.pasteStart, this.editor.cursor);
+          this.editor.insert(replacement);
+        }
+      }
       this.menu.update(key, this.host);
       this.render();
       return;
@@ -366,7 +377,8 @@ export class Footer {
           editor.historyForward();
           break;
         case 'v':
-          // Terminals paste text only, so an image on the clipboard is fetched on request.
+          // Terminals paste text only, so an image on the clipboard is fetched on request. This
+          // also covers a terminal whose own paste key sends nothing for a picture.
           this.options.onPasteImage?.(false);
           return;
         case 'left':

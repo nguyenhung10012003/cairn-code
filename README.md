@@ -125,7 +125,8 @@ In an interactive session: `Esc` or `Ctrl+C` interrupts the running turn, `Shift
 - **After each turn,** a line sums up what it spent and how long it took, such as `▸ Cost: turn $0.42 • session $3.17 | Tokens: turn 48k • session 1.2M | Time: 1m 20s`. The turn's figures include its subagents, compaction, and anything else that ran in the background meanwhile; the session's are everything since Cairn started. A `+` marks a cost that includes a model with no known price, and the cost is left out when no model used so far has one.
 - **When the context is nearly full,** at 75% of the point where it is compacted automatically (60% of the window by default, or of the `/autocompact` setting), each turn ends with a note to run `/compact` before you continue, such as `! Context is 64% full (128k of 200k tokens). Consider /compact before you continue. Otherwise it is compacted on its own past 160k.`
 - **Editing:** `←` `→`, `Home` `End`, `Ctrl+A` `Ctrl+E`, word moves with `Alt+←` `Alt+→`, `Ctrl+U` `Ctrl+K` `Ctrl+W`, and `↑` `↓` for earlier messages. Pasted text keeps its line breaks, and `Alt+Enter` or a line ending in `\` starts a new line. `Ctrl+C` clears the line, or stops the work when the line is empty. `Ctrl+D` on an empty line quits.
-- **Images:** `Ctrl+V` pastes the image on the clipboard (`Cmd+V` and `Ctrl+Shift+V` paste text only, because terminals do). It appears on the line as a placeholder such as `[Image #1]`, and the message takes the images whose placeholders it still has when it is sent, ahead of its text. `Backspace` deletes a placeholder whole. Dropping image files on the terminal attaches them the same way: a paste made only of absolute paths, `~/` paths or `file://` URLs to PNG, JPEG, GIF or WebP files becomes placeholders, and any other paste stays text. A file copied in Finder or a Linux file manager can be pasted with `Ctrl+V` too. An image over the API's 5 MB limit is shrunk to a JPEG, as `Read` does. The clipboard is read with `osascript` on macOS, and with `wl-paste` (wl-clipboard) on Wayland or `xclip` on X11 on Linux; on Linux, shrinking needs ImageMagick. Images are saved in the transcript, so a resumed session still has them; compaction keeps only a note that there was one.
+- **Long pastes:** a paste of more than 3 lines or 800 characters goes on the line as a placeholder, such as `[Pasted text #1 +42 lines]` or `[Pasted text #2 1,240 chars]`, in the place the text would have gone. The message carries the full text when it is sent, and so do a command's arguments, such as `/btw [Pasted text #1 +42 lines]`; the conversation on screen keeps the placeholder. `Backspace` deletes a placeholder whole, which leaves that paste out, and `↑` brings back a message with its pastes.
+- **Images:** `Cmd+V` on macOS, or `Ctrl+V` on Windows and Linux, pastes the image on the clipboard. When the clipboard holds a picture and no text, the terminal's paste reaches Cairn empty, and Cairn reads the picture itself. A terminal that sends nothing then, such as iTerm2 before 3.7, needs `Ctrl+V`, which pastes an image on every platform. iTerm2 3.7 and later asks what to do with a pasted image instead: Save to Temp File and Paste Path attaches it. The image appears on the line as a placeholder such as `[Image #1]`, and the message takes the images whose placeholders it still has when it is sent, ahead of its text. `Backspace` deletes a placeholder whole. Dropping image files on the terminal attaches them the same way: a paste made only of absolute paths, `~/` paths or `file://` URLs to PNG, JPEG, GIF or WebP files becomes placeholders, and any other paste stays text. A file copied in Finder, Explorer or a Linux file manager can be pasted with `Ctrl+V` too. An image over the API's 5 MB limit is shrunk to a JPEG, as `Read` does. The clipboard is read with `osascript` on macOS, with PowerShell on Windows, and with `wl-paste` (wl-clipboard) on Wayland or `xclip` on X11 on Linux; on Linux, shrinking needs ImageMagick. Images are saved in the transcript, so a resumed session still has them; compaction keeps only a note that there was one.
 
 **Permission prompts** list the answers: Yes; Yes, and don't ask again (when a rule can cover the call); and No. `Up` and `Down` choose and `Enter` confirms; `1` to `3`, `y`, `a` and `n` answer at once; `Esc` answers No. `Tab` adds a note to the highlighted answer, and `Enter` sends both. A note with No tells the model what to do instead. A note with Yes reaches the model together with the call's result. Without a terminal, such as when input is piped, the answer is typed instead. Once you approve, the prompt is taken off the screen: the call's line above it and its result below it remain, plus one line when you chose don't ask again, naming the rule. A refused prompt stays. A prompt too tall to fit on the screen also stays, because its top has scrolled out of reach. Messages that arrive while a prompt is open, such as a background agent finishing, are shown once it is answered.
 
@@ -155,7 +156,7 @@ Without `--type`, `add` asks for the type, then for the base URL, the key and th
 
 **Keys** are saved in `~/.cairn/credentials.json`, which only you can read (mode 0600). They never go in a settings file. A variable takes precedence over a saved key: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OLLAMA_API_KEY`, or the one named by `apiKeyEnv`. Each key is saved together with the address it was entered for, and is only sent there. If the provider's `baseUrl` changes, through your settings, a project's settings or a variable such as `OPENAI_BASE_URL`, Cairn warns and sends no key until you save one for the new address. This stops a repository from redirecting a provider name to its own server to collect your key. Before saving a key for a plain `http://` address on another machine, Cairn warns that the key would cross the network unencrypted.
 
-**Settings:** a provider added with `cairn provider add` or `/provider add` is written to `~/.cairn/settings.json`, or with `-s project` or `-s local` to this project's files:
+**Settings:** a provider added with `cairn provider add` or `/provider add` is written to `~/.cairn/settings.json`, with `-s project` to `.cairn/settings.json`, or with `-s local` to this project's workspace folder (see Configuration):
 
 ```json
 {
@@ -262,7 +263,7 @@ cairn mcp remove github
 
 | Scope | Stored in | For |
 | --- | --- | --- |
-| `local` (default) | `~/.cairn/projects/<project>/mcp.json` | Only you, only this project. Outside the repository, so a token cannot be committed by mistake |
+| `local` (default) | `~/.cairn/workspaces/<hash>/mcp.json` | Only you, only this project. Outside the repository, so a token cannot be committed by mistake |
 | `project` | `.mcp.json` at the repository root | Shared with the team through git. Use `${VAR}` instead of writing tokens |
 | `user` | `~/.cairn/mcp.json` | Only you, every project |
 
@@ -410,7 +411,7 @@ Besides the file, search, Bash and WebFetch tools, the model has:
 - **PushNotification**: a desktop notification when something is worth coming back for (interactive sessions only).
 - **WebSearch**: web search through Anthropic's server tool. Turn it off with the rule `"deny": ["WebSearch"]`.
 
-**Automatic memory.** The model keeps notes across sessions in `~/.cairn/memory/<project>/`, one file per note, with `MEMORY.md` as an index loaded into every session. Turn it off with `"autoMemoryEnabled": false`.
+**Automatic memory.** The model keeps notes across sessions in `memory/` in the project's workspace folder, `~/.cairn/workspaces/<hash>/`, one file per note, with `MEMORY.md` as an index loaded into every session. Turn it off with `"autoMemoryEnabled": false`.
 
 **Output style.** `"outputStyle"` takes `Concise`, `Explanatory`, `Learning` or `Proactive`, and changes how the model answers for the whole session.
 
@@ -469,7 +470,9 @@ A JSON array instead of `{ "rules": … }` is played in order, one item per requ
 
 ## Configuration
 
-Settings are read in this order: `~/.cairn/settings.json`, `.cairn/settings.json`, `.cairn/settings.local.json`, then `--settings`.
+Settings are read in this order, each overriding the one before: `~/.cairn/settings.json`, the project's workspace folder, `.cairn/settings.json`, `.cairn/settings.local.json`, then `--settings`.
+
+**Workspace folder:** Cairn keeps what it saves for one project in `~/.cairn/workspaces/<hash>/`, outside the repository, where `<hash>` comes from the project's path. It holds `settings.json` (approvals saved with "don't ask again", `/sandbox on|off`, `-s local` providers), `mcp.json` (`-s local` MCP servers) and `memory/`, plus `workspace.json`, which records the project's path. `cairn doctor` and `/config` show the folder for the current project. Cairn never creates `.cairn/` in a repository for its settings: that folder is yours to create, and the files in it override the workspace folder. In a directory that is not trusted, `.cairn/` files contribute only their `deny` and `ask` rules, while the workspace folder always applies, since only you and Cairn write to it. With `--setting-sources`, `local` covers both the workspace folder and `.cairn/settings.local.json`. Memory and MCP servers saved by an earlier version are moved into the folder the first time a session starts in the project.
 
 ```json
 {

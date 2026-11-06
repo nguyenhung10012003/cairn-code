@@ -9,6 +9,7 @@ import { relative } from 'node:path';
 import { APP_DISPLAY_NAME, VERSION } from '../config/paths.ts';
 import type { InstructionFile } from '../core/instructions.ts';
 import type { Runtime } from '../core/runtime.ts';
+import { pasteImageKey } from './clipboard.ts';
 import { clipToWidth, displayWidth, sanitize, style, tailToWidth, wrapToWidth } from './render.ts';
 
 export interface WelcomeRow {
@@ -18,7 +19,7 @@ export interface WelcomeRow {
   fromStart?: boolean;
 }
 
-const TIPS = ['/help for commands', '/usage for costs', 'Shift+Tab to change mode', 'Ctrl+V to paste an image', '/clear to start over'];
+const TIPS = ['/help for commands', '/usage for costs', 'Shift+Tab to change mode', `${pasteImageKey()} to paste an image`, '/clear to start over'];
 /** Below this, the panel is plain lines rather than a box. */
 const MIN_BOX_WIDTH = 44;
 const MAX_INNER_WIDTH = 96;

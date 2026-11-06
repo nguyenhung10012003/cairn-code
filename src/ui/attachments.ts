@@ -11,8 +11,14 @@ import type { ImageBlock } from '../core/messages.ts';
 import { IMAGE_EXTENSIONS, prepareImage } from '../tools/media.ts';
 
 /** A placeholder that ends right at the cursor, which Backspace deletes whole. */
-export const PLACEHOLDER_AT_END = /\[Image #\d+\]$/;
-const PLACEHOLDERS = /\[Image #(\d+)\]/g;
+export const PLACEHOLDER_AT_END = /\[(?:Image #\d+|Pasted text #\d+[^\]\n]*)\]$/;
+const IMAGE_PLACEHOLDERS = /\[Image #(\d+)\]/g;
+/** What follows the number can be edited away: `[Pasted text #1]` still names the paste. */
+const PASTE_PLACEHOLDERS = /\[Pasted text #(\d+)[^\]\n]*\]/g;
+const ANY_PLACEHOLDER = /\[(?:Image #\d+|Pasted text #\d+[^\]\n]*)\]/g;
+/** A paste with more lines than this, or more characters, goes on the line as a placeholder. */
+export const FOLD_PASTE_LINES = 3;
+export const FOLD_PASTE_CHARS = 800;
 /** A paste naming more files than this is not a drop of pictures. */
 const MAX_DROPPED_FILES = 10;
 
@@ -32,7 +38,7 @@ export class AttachedImages {
   in(text: string): ImageBlock[] {
     const seen = new Set<number>();
     const found: ImageBlock[] = [];
-    for (const match of text.matchAll(PLACEHOLDERS)) {
+    for (const match of text.matchAll(IMAGE_PLACEHOLDERS)) {
       const number = Number(match[1]);
       const image = this.images.get(number);
       if (!image || seen.has(number)) continue;
@@ -43,9 +49,42 @@ export class AttachedImages {
   }
 }
 
+/**
+ * Long pastes. Each stands on the line as a placeholder such as [Pasted text #1 +42 lines], so
+ * the line stays readable, and goes back to the full text when the message is sent.
+ */
+export class PastedTexts {
+  /** Kept for the whole session, so a message brought back with Up still has its pastes. */
+  private readonly texts = new Map<number, string>();
+  private next = 1;
+
+  /** True for a paste long enough to fold away. */
+  static isLong(text: string): boolean {
+    return lineCount(text) > FOLD_PASTE_LINES || [...text].length > FOLD_PASTE_CHARS;
+  }
+
+  /** Keeps the text and returns its placeholder. */
+  add(text: string): string {
+    const number = this.next++;
+    this.texts.set(number, text);
+    const lines = lineCount(text);
+    return `[Pasted text #${number} ${lines > 1 ? `+${lines} lines` : `${[...text].length.toLocaleString('en-US')} chars`}]`;
+  }
+
+  /** The message with each placeholder it still has replaced by its paste. */
+  expand(text: string): string {
+    return text.replace(PASTE_PLACEHOLDERS, (placeholder, number: string) => this.texts.get(Number(number)) ?? placeholder);
+  }
+}
+
+/** Lines in a paste, not counting the line break it may end with. */
+function lineCount(text: string): number {
+  return text.replace(/\n+$/, '').split('\n').length;
+}
+
 /** Styles each placeholder in text already sanitized for the screen. */
 export function markPlaceholders(text: string, mark: (placeholder: string) => string): string {
-  return text.replace(PLACEHOLDERS, (placeholder) => mark(placeholder));
+  return text.replace(ANY_PLACEHOLDER, (placeholder) => mark(placeholder));
 }
 
 /**

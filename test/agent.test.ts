@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, it } from 'bun:test';
+import { workspaceSettingsPath } from '../src/config/paths.ts';
 import type { AgentEvent } from '../src/core/agent.ts';
 import { createRuntime } from '../src/core/runtime.ts';
 import type { Runtime, RuntimeOptions } from '../src/core/runtime.ts';
@@ -287,8 +288,9 @@ describe('permissions in the loop', () => {
     );
     await collect(h.runtime, 'go');
     assert.equal(h.prompts.length, 1);
-    const saved = JSON.parse(readFileSync(join(dir, '.cairn/settings.local.json'), 'utf8')) as { permissions: { allow: string[] } };
+    const saved = JSON.parse(readFileSync(workspaceSettingsPath(dir), 'utf8')) as { permissions: { allow: string[] } };
     assert.deepEqual(saved.permissions.allow, ['Bash(npm-like run)']);
+    assert.equal(existsSync(join(dir, '.cairn')), false);
   });
 
   it('does not offer a saved rule for a forced prompt', async () => {

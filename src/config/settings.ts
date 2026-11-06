@@ -1,12 +1,16 @@
 /**
- * Layered settings: user < project < local < --settings. Permission rules from every layer
- * accumulate, and scalars take the last value. Untrusted project layers contribute only their
- * restrictive rules, because hooks, allow rules and provider choice can all be used by a
- * malicious repository to run code or send data elsewhere.
+ * Layered settings: user < workspace < project < project local < --settings. The workspace layer
+ * is the file this machine keeps for the project outside the repository, where the app saves what
+ * it is told to keep; the repository's `.cairn/` files are the user's own, and override it.
+ * Permission rules from every layer accumulate, and scalars take the last value. Untrusted
+ * `.cairn/` layers contribute only their restrictive rules, because hooks, allow rules and
+ * provider choice can all be used by a malicious repository to run code or send data elsewhere.
+ * The workspace layer always applies in full: like the user's settings, no repository can write it.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { appHome, localSettingsPath, PROJECT_DIR, projectSettingsPath, userSettingsPath } from './paths.ts';
+import { appHome, PROJECT_DIR, projectLocalSettingsPath, projectSettingsPath, userSettingsPath, workspaceSettingsPath } from './paths.ts';
+import { ensureWorkspaceDir } from './workspace.ts';
 import { parseRule } from '../permissions/rules.ts';
 import { mergeSandboxSettings } from '../sandbox/sandbox.ts';
 import type { PermissionRule, RuleBehavior, RuleSource } from '../permissions/rules.ts';
@@ -220,9 +224,12 @@ export function loadSettings(options: LoadOptions): LoadedSettings {
     if (typeof user.autoUpdates === 'boolean') result.autoUpdates = user.autoUpdates;
   }
 
+  const workspace = sources.includes('local') ? readJson(workspaceSettingsPath(options.cwd), warnings) : null;
+  if (workspace) apply(workspace, 'local', options.cwd, true);
+
   for (const [path, source] of [
     [projectSettingsPath(options.cwd), 'project'],
-    [localSettingsPath(options.cwd), 'local'],
+    [projectLocalSettingsPath(options.cwd), 'local'],
   ] as const) {
     if (!sources.includes(source)) continue;
     const project = readJson(path, warnings);
@@ -255,11 +262,12 @@ export function loadSettings(options: LoadOptions): LoadedSettings {
   return result;
 }
 
+/** `local` is this project on this machine: the workspace folder, outside the repository. */
 export type SettingsScope = 'user' | 'project' | 'local';
 
 export function settingsPathFor(scope: SettingsScope, cwd: string): string {
   if (scope === 'user') return userSettingsPath();
-  return scope === 'project' ? projectSettingsPath(cwd) : localSettingsPath(cwd);
+  return scope === 'project' ? projectSettingsPath(cwd) : workspaceSettingsPath(cwd);
 }
 
 /**
@@ -281,10 +289,10 @@ export function updateSettingsFile(path: string, change: (settings: Record<strin
   writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
 }
 
-/** Saves an approval the user chose to keep. The local file is never meant to be committed. */
+/** Saves an approval the user chose to keep, in the workspace folder rather than the repository. */
 export function appendLocalAllowRule(cwd: string, rule: string): void {
-  const path = localSettingsPath(cwd);
-  mkdirSync(dirname(path), { recursive: true });
+  ensureWorkspaceDir(cwd);
+  const path = workspaceSettingsPath(cwd);
   const settings = readJson(path, []) ?? {};
   const permissions = (settings.permissions ??= {});
   const allow = (permissions.allow ??= []);

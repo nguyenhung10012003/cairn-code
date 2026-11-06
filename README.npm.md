@@ -82,7 +82,8 @@ In a session, `/provider` opens a list of providers: type to narrow it, use `↑
 - **Typing `/`** opens a menu of commands that narrows as you type. `↑` `↓` choose, `Enter` runs, `Tab` completes.
 - **Permission prompts** list Yes, Yes and don't ask again, and No. `↑` `↓` and `Enter` choose, `y` `a` `n` answer at once, and `Tab` adds a note for the model to the highlighted answer. An approved prompt is taken off the screen; a refused one stays.
 - **Thinking** shows in a few dimmed lines above the input while it streams, then folds to one line such as `✻ Thought for 12s`.
-- **Images:** `Ctrl+V` pastes the image on the clipboard as `[Image #1]`, and image files dropped on the terminal are attached the same way. Delete the placeholder to leave the image out. On Linux this needs `wl-clipboard` (Wayland) or `xclip` (X11).
+- **Long pastes** (more than 3 lines or 800 characters) show as `[Pasted text #1 +42 lines]` and go in full with the message.
+- **Images:** `Cmd+V` on macOS, or `Ctrl+V` on Windows and Linux, pastes the image on the clipboard as `[Image #1]`, and image files dropped on the terminal are attached the same way. Delete the placeholder to leave the image out. In a terminal whose `Cmd+V` pastes only text, such as iTerm2 before 3.7, use `Ctrl+V`. On Linux this needs `wl-clipboard` (Wayland) or `xclip` (X11).
 - **Keys:** `Esc` or `Ctrl+C` stops the running work. `Shift+Tab` changes the permission mode. `Alt+Enter`, or a line ending in `\`, starts a new line. Pasted text keeps its line breaks. `Ctrl+D` on an empty line quits.
 
 | Command | What it does |
@@ -131,7 +132,9 @@ Choose one with `--permission-mode`, `Shift+Tab` or `/mode`. Rules go in setting
 
 ## Configuration
 
-Settings are read from `~/.cairn/settings.json`, then `.cairn/settings.json` in the project, then `.cairn/settings.local.json`, then `--settings`.
+Settings are read from `~/.cairn/settings.json`, then the project's workspace folder, then `.cairn/settings.json` in the project, then `.cairn/settings.local.json`, then `--settings`. Each overrides the one before.
+
+What Cairn saves for a project (approvals saved with "don't ask again", `-s local` providers and MCP servers, memory) goes in its workspace folder, `~/.cairn/workspaces/<hash>/`, outside the repository; `cairn doctor` shows which one. Cairn does not create `.cairn/` in a repository for settings: that folder is yours, and its files override the workspace folder.
 
 ```json
 {
@@ -175,7 +178,7 @@ Replies come from a built-in script instead of a model. Type `help` to see what 
 
 ## Your data
 
-Cairn keeps its files in `~/.cairn` (or `CAIRN_HOME`): settings, saved keys, session transcripts, file checkpoints and memory. Each transcript also records the tokens and estimated cost of every response, which `cairn usage` totals per day, `cairn usage projects` per project and `cairn usage sessions` per session; add `--since`, `--until`, `--project <path>` or `--json`. `cairn purge --dry-run` lists the transcripts, file history and logs stored for the current project, and `cairn purge --yes` deletes them. The project's own files are not touched.
+Cairn keeps its files in `~/.cairn` (or `CAIRN_HOME`): settings, saved keys, session transcripts, file checkpoints and memory. Each transcript also records the tokens and estimated cost of every response, which `cairn usage` totals per day, `cairn usage projects` per project and `cairn usage sessions` per session; add `--since`, `--until`, `--project <path>` or `--json`. `cairn purge --dry-run` lists the workspace folder (settings, saved approvals, MCP servers and memory), transcripts, file history and logs stored for the current project, and `cairn purge --yes` deletes them. The project's own files, `.cairn/` included, are not touched.
 
 ## Versions
 

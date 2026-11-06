@@ -12,6 +12,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, it } from 'bun:te
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { runSlashCommand, settleCommand, commandNames } from '../src/commands/slash.ts';
+import { workspaceSettingsPath } from '../src/config/paths.ts';
 import { loadSettings } from '../src/config/settings.ts';
 import type { AgentEvent } from '../src/core/agent.ts';
 import { createRuntime } from '../src/core/runtime.ts';
@@ -574,7 +575,7 @@ describe('MCP through the agent', () => {
     );
     await collect(always.runtime, 'go');
     assert.equal(always.prompts.length, 1);
-    const saved = JSON.parse(readFileSync(join(always.runtime.projectDir, '.cairn/settings.local.json'), 'utf8')) as { permissions: { allow: string[] } };
+    const saved = JSON.parse(readFileSync(workspaceSettingsPath(always.runtime.projectDir), 'utf8')) as { permissions: { allow: string[] } };
     assert.deepEqual(saved.permissions.allow, ['mcp__t__echo']);
   });
 

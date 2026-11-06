@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { APP_NAME } from '../config/paths.ts';
 import { isTrusted } from '../config/trust.ts';
+import { ensureWorkspaceDir } from '../config/workspace.ts';
 import { sanitize } from '../ui/render.ts';
 import { configPathFor, loadMcpConfig, normalizeServerName, writeServer } from './config.ts';
 import { McpManager } from './manager.ts';
@@ -12,7 +13,7 @@ const USAGE = `Usage: ${APP_NAME} mcp <command>
 
   add [options] <name> <command-or-url> [-- args...]
       -t, --transport <stdio|http|sse>   Default: stdio, or http for a URL
-      -s, --scope <local|project|user>   Default: local (this project, only you)
+      -s, --scope <local|project|user>   Default: local (this project, only you, outside the repository)
       -e, --env KEY=VALUE                Environment for a stdio server (repeatable)
       -H, --header "Name: value"         Header for a remote server (repeatable)
   add-json [-s scope] <name> <json>      Add a server from a JSON definition
@@ -104,6 +105,7 @@ function runAdd(argv: string[], projectDir: string): void {
     throw new Error(`Unknown transport: ${transport}`);
   }
   const path = configPathFor(scope, projectDir);
+  if (scope === 'local') ensureWorkspaceDir(projectDir);
   writeServer(path, name, entry);
   process.stdout.write(`Added ${name} to ${path} (${scope} scope).\n`);
   if (scope === 'project') process.stdout.write('This file is meant to be committed, so do not put tokens in it. Use ${VARIABLE} references.\n');
@@ -129,6 +131,7 @@ export async function runMcpCommand(argv: string[]): Promise<number> {
         const entry = JSON.parse(requireArg(positionals[1], 'a JSON definition')) as Record<string, unknown>;
         const scope = parseScope(values.scope);
         const path = configPathFor(scope, projectDir);
+        if (scope === 'local') ensureWorkspaceDir(projectDir);
         writeServer(path, name, entry);
         process.stdout.write(`Added ${name} to ${path} (${scope} scope).\n`);
         return 0;
@@ -137,6 +140,8 @@ export async function runMcpCommand(argv: string[]): Promise<number> {
         const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { scope: { type: 'string', short: 's' } } });
         const name = requireArg(positionals[0], 'a server name');
         const scopes: Scope[] = values.scope ? [parseScope(values.scope)] : ['local', 'project', 'user'];
+        // So a server an earlier version saved is found where it is now kept.
+        if (scopes.includes('local')) ensureWorkspaceDir(projectDir);
         for (const scope of scopes) {
           const path = configPathFor(scope, projectDir);
           if (writeServer(path, name, null)) {

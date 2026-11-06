@@ -5,7 +5,8 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { appHome, sessionsDir } from '../config/paths.ts';
+import { appHome, workspaceMcpPath } from '../config/paths.ts';
+import { legacyMcpPath } from '../config/workspace.ts';
 
 export type McpScope = 'user' | 'project' | 'local' | 'flag' | 'plugin';
 
@@ -79,9 +80,9 @@ export function projectConfigPath(projectDir: string): string {
   return join(projectDir, '.mcp.json');
 }
 
-/** Kept outside the repo so a token in it cannot be committed by accident. */
+/** In the project's workspace folder, outside the repo, so a token in it cannot be committed by accident. */
 export function localConfigPath(projectDir: string): string {
-  return join(sessionsDir(projectDir), 'mcp.json');
+  return workspaceMcpPath(projectDir);
 }
 
 export function configPathFor(scope: 'user' | 'project' | 'local', projectDir: string): string {
@@ -204,7 +205,9 @@ export function loadMcpConfig(options: McpLoadOptions): LoadedMcpConfig {
     const project = readConfigFile(projectConfigPath(options.projectDir), warnings);
     if (options.trusted) add(project, 'project');
     else pending = Object.keys(project).length;
-    add(readConfigFile(localConfigPath(options.projectDir), warnings), 'local');
+    // Until a session moves it, the file may still be where an earlier version put it.
+    const local = localConfigPath(options.projectDir);
+    add(readConfigFile(existsSync(local) ? local : legacyMcpPath(options.projectDir), warnings), 'local');
   }
   for (const arg of options.configArgs ?? []) {
     const trimmed = arg.trim();
@@ -240,6 +243,8 @@ export function writeServer(path: string, name: string, entry: Record<string, un
   if (existsSync(path)) document = JSON.parse(readFileSync(path, 'utf8')) as typeof document;
   const servers = (document.mcpServers ??= {});
   const existed = name in servers;
+  // Removing what is not there changes nothing, so no file is created for it.
+  if (!entry && !existed) return false;
   if (entry) servers[name] = entry;
   else delete servers[name];
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });

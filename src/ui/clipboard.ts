@@ -1,7 +1,8 @@
 /**
- * Pictures from the system clipboard, for Ctrl+V. Terminals paste text only, so the picture is
- * read with the platform's own tools: osascript on macOS, and wl-paste (Wayland) or xclip (X11)
- * on Linux. A file copied in a file manager counts too, when it is a picture.
+ * Pictures from the system clipboard, for the paste key: Cmd+V on macOS, Ctrl+V on Windows and
+ * Linux. Terminals paste text only, so the picture is read with the platform's own tools:
+ * osascript on macOS, PowerShell on Windows, and wl-paste (Wayland) or xclip (X11) on Linux. A
+ * file copied in a file manager counts too, when it is a picture.
  */
 import { spawn } from 'node:child_process';
 import { statSync } from 'node:fs';
@@ -28,6 +29,38 @@ const MAC_TYPES: { listed: string; as: string; extension: string; convert?: bool
   { listed: 'GIF picture', as: 'GIF picture', extension: 'gif' },
   { listed: 'TIFF picture', as: 'TIFF picture', extension: 'tiff', convert: true },
 ];
+
+/**
+ * Lists the files copied in Explorer, one `file <base64 of the UTF-8 path>` line each, so a name
+ * survives whatever code page the console has. Then saves the clipboard's picture as a PNG to the
+ * file CAIRN_CLIPBOARD_OUT names and says `image`. Errors go to stderr as plain text, since
+ * PowerShell would otherwise write them there as CLIXML.
+ */
+const WINDOWS_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  "$ProgressPreference = 'SilentlyContinue'",
+  'try {',
+  '  Add-Type -AssemblyName System.Windows.Forms, System.Drawing',
+  '  if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) {',
+  '    foreach ($file in [System.Windows.Forms.Clipboard]::GetFileDropList()) {',
+  "      'file ' + [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($file))",
+  '    }',
+  '  }',
+  '  if ([System.Windows.Forms.Clipboard]::ContainsImage()) {',
+  '    $image = [System.Windows.Forms.Clipboard]::GetImage()',
+  '    try { $image.Save($env:CAIRN_CLIPBOARD_OUT, [System.Drawing.Imaging.ImageFormat]::Png) } finally { $image.Dispose() }',
+  "    'image'",
+  '  }',
+  '} catch {',
+  '  [Console]::Error.WriteLine($_.Exception.Message)',
+  '  exit 1',
+  '}',
+].join('\n');
+
+/** The key that pastes an image: Cmd+V on macOS, Ctrl+V elsewhere. */
+export function pasteImageKey(platform: NodeJS.Platform = process.platform): string {
+  return platform === 'darwin' ? 'Cmd+V' : 'Ctrl+V';
+}
 
 export type ClipboardImage =
   /** A file holding the picture. `cleanup` deletes it when it was written for this. */
@@ -187,9 +220,36 @@ async function linuxClipboard(env: NodeJS.ProcessEnv): Promise<ClipboardImage> {
   return failed('Pasting an image needs wl-clipboard on Wayland or xclip on X11. Install one, such as with sudo apt install wl-clipboard xclip.');
 }
 
+async function windowsClipboard(env: NodeJS.ProcessEnv): Promise<ClipboardImage> {
+  const raw = await scratchFile('png');
+  // An encoded script needs no quoting, and the file name goes in the environment for the same reason.
+  const script = Buffer.from(WINDOWS_SCRIPT, 'utf16le').toString('base64');
+  const result = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', script], { ...env, CAIRN_CLIPBOARD_OUT: raw.path });
+  if (result.missing || result.code !== 0) {
+    await raw.cleanup();
+    if (result.missing) return failed('Pasting an image needs PowerShell (powershell.exe), which comes with Windows.');
+    // .NET messages end with a full stop of their own.
+    const reason = result.stderr.startsWith('#< CLIXML') ? '' : result.stderr.replace(/\.$/, '');
+    return failed(`Could not read the clipboard: ${reason || 'PowerShell failed'}.`);
+  }
+  const lines = result.stdout.toString().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  // A file copied in Explorer: the picture itself.
+  for (const line of lines) {
+    const file = line.startsWith('file ') ? imageFile(Buffer.from(line.slice('file '.length), 'base64').toString('utf8')) : null;
+    if (file) {
+      await raw.cleanup();
+      return { ok: true, path: file, cleanup: async () => {} };
+    }
+  }
+  if (lines.includes('image')) return { ok: true, ...raw };
+  await raw.cleanup();
+  return noImage();
+}
+
 /** The picture on the clipboard, saved to a file. `platform` and `env` are for tests. */
 export async function readClipboardImage(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): Promise<ClipboardImage> {
   if (platform === 'darwin') return macClipboard(env);
   if (platform === 'linux') return linuxClipboard(env);
-  return failed('Pasting an image works on macOS and Linux only. Save the image to a file and drop the file here instead.');
+  if (platform === 'win32') return windowsClipboard(env);
+  return failed('Pasting an image works on macOS, Linux and Windows only. Save the image to a file and drop the file here instead.');
 }

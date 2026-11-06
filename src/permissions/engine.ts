@@ -54,7 +54,7 @@ export type AccessRequest =
 
 export interface RuleSuggestion {
   rule: string;
-  /** True: saved to the project's local settings. False: lasts for this session only. */
+  /** True: saved to the project's workspace settings, outside the repository. False: lasts for this session only. */
   persist: boolean;
 }
 

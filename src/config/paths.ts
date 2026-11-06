@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,11 +22,33 @@ export function userSettingsPath(): string {
   return join(appHome(), 'settings.json');
 }
 
+/**
+ * The folder this machine keeps for one project, outside the repository, named by a hash of the
+ * project's path. It holds the project's settings and saved approvals, its local MCP servers and
+ * its memory. The repository's own `.cairn/` folder is for the user to create, and overrides it.
+ */
+export function workspaceDir(projectDir: string): string {
+  return join(appHome(), 'workspaces', createHash('sha256').update(projectDir).digest('hex').slice(0, 16));
+}
+
+export function workspaceSettingsPath(projectDir: string): string {
+  return join(workspaceDir(projectDir), 'settings.json');
+}
+
+export function workspaceMcpPath(projectDir: string): string {
+  return join(workspaceDir(projectDir), 'mcp.json');
+}
+
+export function workspaceMemoryDir(projectDir: string): string {
+  return join(workspaceDir(projectDir), 'memory');
+}
+
 export function projectSettingsPath(cwd: string): string {
   return join(cwd, PROJECT_DIR, 'settings.json');
 }
 
-export function localSettingsPath(cwd: string): string {
+/** A file the user may create in the repository's `.cairn/`, kept out of git. */
+export function projectLocalSettingsPath(cwd: string): string {
   return join(cwd, PROJECT_DIR, 'settings.local.json');
 }
 
