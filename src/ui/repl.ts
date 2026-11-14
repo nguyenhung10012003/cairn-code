@@ -35,7 +35,7 @@ export const SEND_DELAY_MS = 3_000;
 /** Commands that leave the running work alone, so they may run alongside it. */
 const WHILE_BUSY = new Set([
   'help', 'status', 'cost', 'usage', 'context', 'todos', 'tasks', 'queue', 'copy', 'diff', 'mode', 'effort',
-  'permissions', 'agents', 'skills', 'memory', 'hooks', 'btw', 'exit', 'quit',
+  'permissions', 'agents', 'skills', 'memory', 'hooks', 'btw', 'loop', 'exit', 'quit',
 ]);
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -375,6 +375,10 @@ function echo(text: string): string {
 
 export async function runRepl(runtime: Runtime, terminal: Terminal, initialPrompt?: string): Promise<void> {
   emitKeypressEvents(stdin);
+  // Any key, answering a prompt too, means someone is at the terminal. A prompt starting does
+  // not, since a scheduled job starts them on its own.
+  const onActivity = (): void => runtime.noteUserActivity();
+  stdin.on('keypress', onActivity);
   const { input, prompter } = terminal;
   const promptText = (): string => {
     const mode = runtime.engine.mode;
@@ -428,6 +432,10 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     const monitors = running.length - shells;
     if (shells > 0) parts.push(plural(shells, 'shell'));
     if (monitors > 0) parts.push(plural(monitors, 'monitor'));
+    const jobs = runtime.cron?.count() ?? 0;
+    if (jobs > 0) parts.push(`${jobs} scheduled`);
+    const loopAt = runtime.loops?.waitingUntil();
+    if (loopAt) parts.push(`loop at ${loopAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${busy ? '' : ' · Esc stops it'}`);
     if (queue.length > 0) parts.push(`${queue.length} queued`);
     if (attaching > 0) parts.push('Attaching an image…');
     const usage = runtime.agent.totalUsage;
@@ -457,6 +465,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     onEscape: () => escape(),
     onInterrupt: () => {
       if (pending || busy) return escape();
+      if (cancelLoop()) return;
       if (!quitHinted) print(style.dim('Press Ctrl+D or type /exit to quit.\n'));
       quitHinted = true;
     },
@@ -645,7 +654,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     if (exiting || busy || scheduled > 0 || pending) return;
     if (runtime.wakes.pending()) {
       const { prompts, notes } = runtime.wakes.take();
-      for (const prompt of prompts) schedule(() => runTurn(prompt));
+      for (const prompt of prompts) schedule(() => (prompt.run ? runAgent(prompt.run) : runTurn(prompt.text)));
       if (notes) schedule(() => runAgent((signal) => runtime.agent.resumeForNotes(signal)));
       return;
     }
@@ -685,6 +694,14 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     footer.render();
   };
 
+  /** While nothing runs, a self-paced loop waiting for its next iteration is stopped. */
+  const cancelLoop = (): boolean => {
+    if (busy || scheduled > 0 || !runtime.loops?.cancelWaiting()) return false;
+    print(`${style.dim('Pending wakeup cancelled: the loop is stopped.')}\n`);
+    footer.render();
+    return true;
+  };
+
   /** Esc: a waiting message goes back to the line to edit; otherwise running work stops. */
   const escape = (): void => {
     if (pending) {
@@ -695,6 +712,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
       footer.render();
       return;
     }
+    if (cancelLoop()) return;
     busy?.controller.abort();
   };
 
@@ -719,6 +737,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     // removed), then the cursor to the top. The panel says which session this now is.
     if (result.clearScreen) print(`\x1b[2J\x1b[3J\x1b[H${welcome()}\n`);
     else if (result.output) print(`${sanitize(result.output)}\n`);
+    if (result.notice) print(`${style.dim(sanitize(result.notice))}\n`);
     if (result.exit) return exit();
     if (result.compact) {
       const focus = result.compact.focus;
@@ -794,6 +813,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
   await exited;
   clearInterval(ticker);
   stopWaking();
+  stdin.off('keypress', onActivity);
   footer.stop();
   stdin.pause();
 }

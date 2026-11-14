@@ -7,6 +7,7 @@ import { updateSettingsFile } from '../config/settings.ts';
 import { markTrusted } from '../config/trust.ts';
 import { ensureWorkspaceDir } from '../config/workspace.ts';
 import { renderTranscript } from '../core/compaction.ts';
+import { parseLoop } from '../core/loop.ts';
 import { textOf } from '../core/messages.ts';
 import type { Effort } from '../core/provider.ts';
 import type { Runtime } from '../core/runtime.ts';
@@ -33,6 +34,8 @@ export interface CommandResult {
   exit?: boolean;
   /** Wipe the terminal, screen and scrollback, as for a fresh start. The interactive session then draws its opening panel again. */
   clearScreen?: boolean;
+  /** A line to show after `output`, or after the opening panel when the screen is cleared, which `output` is not. */
+  notice?: string;
   /** Run a compaction, which needs the UI's streaming and interrupt handling. */
   compact?: { focus?: string };
   /** Slow work the user may want to interrupt. The UI runs it, and it leads to another result. */
@@ -149,6 +152,56 @@ export function parseTokenCount(text: string): number | undefined {
   return tokens >= 100_000 && tokens <= 1_000_000 ? tokens : undefined;
 }
 
+function clock(date: Date | null): string {
+  return date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'never';
+}
+
+/** What /tasks shows: commands and monitors, agents, and scheduled jobs. */
+function backgroundListing(runtime: Runtime): string {
+  const sections: string[] = [];
+  const tasks = runtime.context.tasks.list();
+  if (tasks.length > 0) {
+    const rows = tasks.map((task) => `  ${task.id}  ${task.status.padEnd(9)} ${task.kind === 'monitor' ? 'monitor: ' : ''}${task.description ?? task.command.split('\n')[0]!.slice(0, 60)}\n    ${task.logPath}`);
+    sections.push(['Commands:', ...rows].join('\n'));
+  }
+  const agents = runtime.backgroundAgents.list();
+  if (agents.length > 0) sections.push(['Agents:', ...agents.map((agent) => `  ${agent.id}  ${agent.status.padEnd(9)} ${agent.description} (${agent.type})`)].join('\n'));
+  const jobs = runtime.cron?.list() ?? [];
+  if (jobs.length > 0) {
+    const rows = jobs.map((job) => {
+      const what = job.origin === 'wakeup' ? 'next iteration of the self-paced /loop' : job.loopDefault ? 'the /loop default prompt' : job.prompt.replace(/\s+/g, ' ').slice(0, 60);
+      const kind = [job.recurring ? job.cron : 'once', ...(job.durable ? ['durable'] : []), ...(job.origin === 'loop' ? ['/loop'] : [])].join(', ');
+      return `  ${job.id}  next ${clock(job.nextRun).padEnd(9)} ${what}  (${kind})`;
+    });
+    sections.push(['Scheduled:', ...rows].join('\n'));
+  }
+  return sections.length > 0 ? sections.join('\n') : 'No background work, and nothing scheduled.';
+}
+
+/** /tasks stop <id>: a command or monitor, an agent, or a scheduled job, whichever has that id. */
+function stopBackgroundItem(id: string, runtime: Runtime): string {
+  const task = runtime.context.tasks.get(id);
+  if (task) {
+    if (task.status !== 'running') return `${id} is not running (${task.status}).`;
+    runtime.context.tasks.stop(id);
+    return `Stopped ${id}. Its output is in ${task.logPath}.`;
+  }
+  const agents = runtime.backgroundAgents;
+  const before = agents.list();
+  const agent = agents.stop(id);
+  if (agent) {
+    const wasRunning = before.find((known) => known.id === agent.id)?.status === 'running';
+    return wasRunning ? `Stopped agent ${agent.id} (${agent.description}).` : `Agent ${agent.id} is not running (${agent.status}).`;
+  }
+  const job = runtime.cron?.list().find((scheduled) => scheduled.id === id);
+  if (job?.origin === 'wakeup') {
+    runtime.loops?.stop();
+    return 'Stopped the self-paced loop.';
+  }
+  if (job && runtime.cron?.delete(id)) return `Cancelled scheduled job ${id}${job.durable ? ', which no session of this project runs any more' : ''}.`;
+  return `No task, agent or scheduled job ${id}.`;
+}
+
 const BUILTINS: Record<string, BuiltinCommand> = {
   help: {
     description: 'Show this list',
@@ -185,8 +238,8 @@ const BUILTINS: Record<string, BuiltinCommand> = {
   clear: {
     description: 'Start a new conversation, on a clear screen',
     run: (_args, runtime) => {
-      runtime.newSession();
-      return { output: `Started a new session: ${runtime.agent.sessionId}`, clearScreen: true };
+      const { stopped } = runtime.newSession();
+      return { output: `Started a new session: ${runtime.agent.sessionId}`, clearScreen: true, ...(stopped ? { notice: stopped } : {}) };
     },
   },
   compact: {
@@ -315,7 +368,10 @@ const BUILTINS: Record<string, BuiltinCommand> = {
         if (choice === null) return {};
         id = sessions[choice]!.id;
       }
-      return { output: runtime.resumeSession(id) ? `Resumed ${id}.` : `No session ${id}.` };
+      const resumed = runtime.resumeSession(id);
+      if (!resumed) return { output: `No session ${id}.` };
+      const notice = [resumed.stopped, resumed.restored].filter(Boolean).join('\n');
+      return { output: `Resumed ${id}.`, ...(notice ? { notice } : {}) };
     },
   },
   status: {
@@ -581,19 +637,29 @@ const BUILTINS: Record<string, BuiltinCommand> = {
       return { output: runtime.sandbox ? runtime.sandbox.describe().join('\n') : 'Sandbox: off. Shell commands run under the permission rules only.' };
     },
   },
+  loop: {
+    description: 'Run a prompt again and again: /loop 5m <prompt> on a schedule, /loop <prompt> at a pace the model picks, /loop alone for the default prompt. Also: /loop stop',
+    run: (args, runtime) => {
+      const loops = runtime.loops;
+      if (!loops) return { output: 'Loops need an interactive session.' };
+      if (args.trim().toLowerCase() === 'stop') return { output: loops.stopAll() };
+      try {
+        const request = parseLoop(args, new Date());
+        return { output: request.every ? loops.startFixed(request.every, request.prompt) : loops.start(request.prompt) };
+      } catch (error) {
+        return { output: (error as Error).message };
+      }
+    },
+  },
   tasks: {
-    description: 'List background commands. Also: /tasks stop <id>',
+    description: 'List background commands, agents and scheduled jobs. Also: /tasks stop <id>',
     run: (args, runtime) => {
       const [action, id] = args.split(/\s+/);
-      const tasks = runtime.context.tasks;
       if (action === 'stop') {
         if (!id) return { output: 'Usage: /tasks stop <id>' };
-        const stopped = tasks.stop(id);
-        return { output: stopped ? `Stopped ${id}.` : `No task ${id}.` };
+        return { output: stopBackgroundItem(id, runtime) };
       }
-      const all = tasks.list();
-      if (all.length === 0) return { output: 'No background commands.' };
-      return { output: all.map((task) => `  ${task.id}  ${task.status.padEnd(9)} ${task.description ?? task.command.split('\n')[0]!.slice(0, 60)}\n    ${task.logPath}`).join('\n') };
+      return { output: backgroundListing(runtime) };
     },
   },
   usage: {

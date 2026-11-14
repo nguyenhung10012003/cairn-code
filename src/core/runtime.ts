@@ -35,7 +35,8 @@ import {
 import type { Effort, JsonSchema, ModelProvider, ProviderConfig, SystemBlock } from './provider.ts';
 import { buildSystemPrompt } from './system-prompt.ts';
 import type { PromptAgent } from './system-prompt.ts';
-import { WakeQueue } from './wakes.ts';
+import { defaultLoopPrompt, LoopController } from './loop.ts';
+import { followBackgroundWork, WakeQueue } from './wakes.ts';
 import { APP_DISPLAY_NAME, appHome, backgroundLogDir, PROJECT_DIR, workspaceMemoryDir } from '../config/paths.ts';
 import { appendLocalAllowRule, loadSettings } from '../config/settings.ts';
 import { ensureWorkspaceDir } from '../config/workspace.ts';
@@ -58,15 +59,17 @@ import { skillTool } from '../tools/skill.ts';
 import { allCredentialVars, createProvider, DEFAULT_PROVIDER, ProviderNotConfiguredError } from '../providers/index.ts';
 import { writeDefaultProvider } from '../providers/manage.ts';
 import { CheckpointStore } from '../session/checkpoints.ts';
+import { WorkspaceJobStore } from '../session/scheduled.ts';
 import { listSessions, resolveSessionId, restoreHistory, SessionStore } from '../session/store.ts';
 import { createWorktree, finishWorktree, isListedWorktree, removeWorktree, worktreeChanges } from '../session/worktree.ts';
 import type { Worktree } from '../session/worktree.ts';
 import { CronScheduler } from '../tools/cron.ts';
 import { builtinTools, INTERACTIVE_ONLY_TOOLS } from '../tools/index.ts';
 import { agentTool } from '../tools/interaction.ts';
+import { Reaper } from '../tools/reaper.ts';
 import { TaskRegistry } from '../tools/tasks.ts';
 import { FileTracker } from '../tools/types.ts';
-import type { AgentControl, Prompter, SubagentRequest, Tool, ToolContext, ToolOutput, WebSearchRequest, WorktreeControl } from '../tools/types.ts';
+import type { AgentControl, CronJobInfo, Prompter, SubagentRequest, Tool, ToolContext, ToolOutput, WebSearchRequest, WorktreeControl } from '../tools/types.ts';
 
 const SUBAGENT_MAX_TURNS = 100;
 /** Session-level tools a subagent does not get: it cannot ask the user, plan, schedule or move the session. */
@@ -79,6 +82,7 @@ const SUBAGENT_EXCLUDED_TOOLS = new Set([
   'CronCreate',
   'CronDelete',
   'CronList',
+  'ScheduleWakeup',
   'EnterWorktree',
   'ExitWorktree',
   'PushNotification',
@@ -90,6 +94,13 @@ const USER_ACTIVE_MS = 60_000;
 /** The tier names the Agent tool takes for `model`. Any other name is a model id, used as given. */
 const MODEL_TIERS = new Set(['opus', 'sonnet', 'haiku', 'fable']);
 const UNATTENDED_BACKGROUND_LIMIT_MS = 10 * 60 * 1000;
+const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 20;
+
+/** How many subagents may run at once: `CAIRN_MAX_CONCURRENT_SUBAGENTS`, or 20. */
+function maxConcurrentSubagents(): number {
+  const set = Number(process.env.CAIRN_MAX_CONCURRENT_SUBAGENTS);
+  return Number.isInteger(set) && set > 0 ? set : DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+}
 const MAX_SUBAGENT_STOP_CONTINUATIONS = 3;
 
 export interface RuntimeOptions {
@@ -148,6 +159,8 @@ export interface RuntimeOptions {
   /** A slow startup step has begun. */
   onProgress?: (text: string) => void;
   openUrl?: (url: URL) => void | Promise<void>;
+  /** Shows a desktop notification, returning whether it could. By default through osascript or notify-send. */
+  desktopNotification?: (message: string) => boolean;
   /** Run Agent calls in the background, so the conversation goes on while they work. The CLI turns this on. */
   backgroundAgents?: boolean;
   /** Name new sessions from their first prompt with a small model call. The interactive CLI turns this on. */
@@ -205,8 +218,17 @@ export interface Runtime {
   sessionName: string | undefined;
   /** --allow-dangerously-skip-permissions: Shift+Tab may reach bypassPermissions. */
   allowBypassMode: boolean;
-  newSession(): void;
-  resumeSession(id: string): boolean;
+  /**
+   * Starts an empty conversation. What the old one left running in the background is stopped,
+   * since the new one would get its reports without knowing what they are about; `stopped` says
+   * what that was.
+   */
+  newSession(): { stopped?: string };
+  /**
+   * Switches to an earlier conversation, stopping background work as newSession does, and
+   * bringing back its saved scheduled jobs; `restored` says which. Null when there is no such session.
+   */
+  resumeSession(id: string): { stopped?: string; restored?: string } | null;
   /** Copies this conversation into a new session and continues there. */
   forkSession(name?: string): void;
   renameSession(name: string): void;
@@ -219,6 +241,8 @@ export interface Runtime {
   /** Subagents started in the background. */
   backgroundAgents: AgentControl & { running(): number };
   cron: CronScheduler | null;
+  /** /loop. Null in a session nobody is at, where nothing is scheduled. */
+  loops: LoopController | null;
   /** The plan file plan mode writes to. */
   planFile(): string;
   /** The worktree the session moved into with EnterWorktree, if it is still there. */
@@ -226,6 +250,8 @@ export interface Runtime {
   exitWorktree(action: 'keep' | 'remove', discardChanges: boolean): Promise<{ content: string; isError?: boolean }>;
   /** Adds text to what the model sees with the next message, such as a command the user ran with `!`. */
   noteForModel(text: string): void;
+  /** The user typed something. A desktop notification within a minute of that would be a duplicate. */
+  noteUserActivity(): void;
   /** Asks the model for a short kebab-case name for this conversation. */
   suggestName(signal: AbortSignal): Promise<string | undefined>;
   shutdown(): Promise<void>;
@@ -285,6 +311,16 @@ function usageDelta(after: Usage, before: Usage): Usage {
     cacheWriteTokens: after.cacheWriteTokens - before.cacheWriteTokens,
     webSearches: after.webSearches - before.webSearches,
   };
+}
+
+/** Saved jobs that run again in this session, which the user should know about. */
+function restoredJobs(jobs: CronJobInfo[]): string {
+  const shown = jobs.slice(0, 3).map((job) => {
+    const prompt = job.loopDefault ? 'the /loop default prompt' : job.prompt.replace(/\s+/g, ' ').slice(0, 60);
+    return `${job.id} ${job.cron} "${prompt}"${job.durable ? ' (durable)' : ''}`;
+  });
+  const more = jobs.length > 3 ? `, and ${jobs.length - 3} more` : '';
+  return `${jobs.length === 1 ? 'A scheduled job is' : `${jobs.length} scheduled jobs are`} running again: ${shown.join('; ')}${more}. Ask ${APP_DISPLAY_NAME} to list or cancel them.`;
 }
 
 /** Sends a desktop notification without passing the text through a shell. */
@@ -476,12 +512,15 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   let mainWatcher: ConversationWatcher | undefined;
   const wakes = new WakeQueue();
   /** Tagged by the caller so that it cannot be taken for something the user typed. */
-  const notifyMain = (text: string): void => {
+  const notifyMain = (text: string, notifyOptions: { settleMs?: number } = {}): void => {
     mainWatcher?.note(text);
-    wakes.notify();
+    wakes.notify(notifyOptions.settleMs);
   };
+  // One for the session: subagents' commands are stopped with their own process, too.
+  const reaper = new Reaper();
   const tasks = new TaskRegistry({
     logDir,
+    reaper,
     ...(options.unattended ? { defaultLimitMs: UNATTENDED_BACKGROUND_LIMIT_MS } : {}),
     onFinished: (_task, message) => {
       notifyMain(`<task-notification>\n${message}\n</task-notification>`);
@@ -711,6 +750,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     return [...added.map((line) => `added   ${line}`), ...removed.map((line) => `removed ${line}`)];
   };
 
+  // Set by the terminal as the user types, not by prompts starting, which a scheduled job does too.
   let lastTypedAt = Date.now();
   let titled = resumeId !== undefined || options.generateTitles !== true;
 
@@ -744,9 +784,32 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       throw new Error(`Unknown subagent type ${typeName}. Available: ${agentDefinitions.map((a) => a.name).join(', ')}`);
     }
     const isFork = definition.name === 'fork' && BUILTIN_AGENTS.includes(definition);
-    // A command a subagent starts in the background ends with that subagent.
-    const subagentTasks = new TaskRegistry({ logDir });
     const subagentWatcher = newWatcher(false);
+    // Messages from other agents wait apart from other notes, so one that comes as the agent
+    // finishes, and so is never seen, can be told apart and given a turn of its own.
+    const inbox: string[] = [];
+    const subagentNotes: AgentWatcher = {
+      touched: (paths) => subagentWatcher.touched(paths),
+      drain: () => [...inbox.splice(0), ...subagentWatcher.drain()],
+      reset: () => {
+        inbox.length = 0;
+        subagentWatcher.reset();
+      },
+    };
+    // A subagent is woken by news of its own background work, as the main session is, and what
+    // is still running when it finishes is stopped. Nobody watches its commands, so they have the
+    // same time limit as in print mode.
+    const subagentWakes = new WakeQueue();
+    const tellSubagent = (text: string, notifyOptions: { settleMs?: number } = {}): void => {
+      subagentWatcher.note(text);
+      subagentWakes.notify(notifyOptions.settleMs);
+    };
+    const subagentTasks = new TaskRegistry({
+      logDir,
+      reaper,
+      defaultLimitMs: UNATTENDED_BACKGROUND_LIMIT_MS,
+      onFinished: (_task, message) => tellSubagent(`<task-notification>\n${message}\n</task-notification>`),
+    });
     let worktree: Worktree | undefined = request.isolation === 'worktree' && !isFork ? createWorktree(projectDir, `agent-${id}`, 'head') : undefined;
     const subagentCwd = worktree?.path;
     const started = await hooks.run('SubagentStart', common(), { agent_type: definition.name }, signal);
@@ -761,9 +824,10 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       tasks: subagentTasks,
       runSubagent: undefined,
       agentId: id,
-      notify: (text) => subagentWatcher.note(text),
+      notify: tellSubagent,
       planMode: undefined,
       cron: undefined,
+      loop: undefined,
       worktrees: undefined,
       pushNotification: undefined,
       agents: options.backgroundAgents ? subagentAgents : undefined,
@@ -804,7 +868,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       hooks,
       store: SessionStore.ephemeral(),
       context: subagentContext,
-      watcher: subagentWatcher,
+      watcher: subagentNotes,
       maxTurns: SUBAGENT_MAX_TURNS,
       autoCompact: false,
       // A fork keeps the parent's server tools; a fresh agent gets them unless its definition drops WebSearch.
@@ -817,7 +881,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     let firstRun = true;
     return {
       type: definition.name,
-      note: (text) => subagentWatcher.note(text),
+      note: (text) => inbox.push(text),
+      unseen: () => inbox.splice(0),
       run: async (text, runSignal) => {
         const usageBefore = { ...subagent.totalUsage };
         const costBefore = subagent.totalCostUsd;
@@ -827,10 +892,18 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
         let failure: string | undefined;
         try {
           for (let continuation = 0; ; continuation++) {
-            for await (const event of subagent.run(nextPrompt, runSignal)) {
+            const events = followBackgroundWork(subagent.run(nextPrompt, runSignal), {
+              resume: (resumeSignal) => subagent.resumeForNotes(resumeSignal),
+              note: (note) => subagentWatcher.note(note),
+              tasks: subagentTasks,
+              wakes: subagentWakes,
+              signal: runSignal,
+            });
+            for await (const event of events) {
               options.onSubagentEvent?.(request.description, event);
               if (event.type === 'turn_end') {
-                finalText = event.text;
+                // A turn it was woken for may end on a tool call alone; its last words still count.
+                finalText = event.text || finalText;
                 failure = event.stopReason === 'error' ? event.error : event.stopReason === 'interrupted' ? 'interrupted' : undefined;
               }
             }
@@ -855,21 +928,35 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     };
   };
 
-  const registry = new AgentRegistry({
+  /** Subagents running inline, for a turn that waits for them. Several can run at once, as Agent calls are read-only. */
+  let inlineSubagents = 0;
+  const checkSubagentLimit = (backgroundRunning: number): void => {
+    const max = maxConcurrentSubagents();
+    if (backgroundRunning + inlineSubagents < max) return;
+    throw new Error(`${max} subagents are already running, the most at once. Wait for one to finish, or stop one with TaskStop, then try again.`);
+  };
+  const registry: AgentRegistry = new AgentRegistry({
     create: (request, id) => createSubagent(request, id),
+    checkLimit: checkSubagentLimit,
     notifyMain,
     ...(options.onNotice ? { onNotice: options.onNotice } : {}),
   });
   if (options.backgroundAgents) context.agents = registry;
 
   context.runSubagent = async (request: SubagentRequest): Promise<string> => {
-    const handle = await createSubagent(request, `a${randomBytes(3).toString('hex')}`, request.signal);
+    checkSubagentLimit(registry.running());
+    inlineSubagents++;
     let result: { text: string; failure?: string };
     let cleanup: string | undefined;
     try {
-      result = await handle.run(request.prompt, request.signal);
+      const handle = await createSubagent(request, `a${randomBytes(3).toString('hex')}`, request.signal);
+      try {
+        result = await handle.run(request.prompt, request.signal);
+      } finally {
+        cleanup = handle.dispose();
+      }
     } finally {
-      cleanup = handle.dispose();
+      inlineSubagents--;
     }
     if (result.failure) throw new Error(result.failure);
     return `${result.text || '(The subagent finished without a final message.)'}${cleanup ? `\n\n${cleanup}` : ''}`;
@@ -912,18 +999,57 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     if (title) store.appendTitle(title);
   };
 
+  // Saved in the workspace folder, which a session that saves nothing does not use.
+  const jobStore = !options.unattended && persist && !restricted ? new WorkspaceJobStore(projectDir) : undefined;
+  const loopPrompt = (): string => defaultLoopPrompt(projectDir, trusted).text;
+  /**
+   * A scheduled prompt such as `/review-pr 12` that names a skill the model may run asks it to
+   * run it with the Skill tool, so its permission checks and hooks apply as they would to the
+   * model, and a skill only the user may run stays plain text. Built-in commands stay text too.
+   */
+  const scheduledPrompt = (text: string): string => {
+    const named = /^\/(\S+)\s*([\s\S]*)$/.exec(text.trim());
+    if (!named || !skillsAvailable) return text;
+    const skill = currentSkills().skills.get(named[1]!);
+    if (!skill || skill.disableModelInvocation) return text;
+    const args = named[2]!.trim();
+    return `${text}\n\n<system-reminder>\nThis scheduled prompt names the skill "${skill.name}". Run it now with the Skill tool: skill "${skill.name}"${args ? `, args ${JSON.stringify(args)}` : ''}.\n</system-reminder>`;
+  };
+  let loops: LoopController | null = null;
   const cron = options.unattended
     ? null
-    : new CronScheduler((prompt, job) => {
-        options.onNotice?.(`Scheduled job ${job.id} is due.`);
-        wakes.prompt(prompt);
-      });
-  if (cron) context.cron = cron;
+    : new CronScheduler(
+        (prompt, job) => {
+          if (job.origin === 'wakeup') {
+            loops?.due(job.id);
+            return;
+          }
+          // A job that comes due again before its last run started runs once, not once per match.
+          if (wakes.prompt(job.loopDefault ? loopPrompt() : scheduledPrompt(prompt), `cron:${job.id}`)) options.onNotice?.(`Scheduled job ${job.id} is due.`);
+        },
+        { session: () => store.id, ...(jobStore ? { store: jobStore } : {}) },
+      );
+  if (cron) {
+    context.cron = cron;
+    loops = new LoopController({
+      cron,
+      wakes,
+      turn: (prompt, signal) => agent.run(prompt, signal),
+      defaultPrompt: loopPrompt,
+      prepare: scheduledPrompt,
+      notice: (text) => options.onNotice?.(text),
+    });
+    context.loop = loops;
+    // Durable jobs, and this session's own when it is being resumed.
+    const restored = cron.restore(store.id);
+    if (restored.length > 0) warnings.push(restoredJobs(restored));
+    if (jobStore) warnings.push(...jobStore.warnings);
+  }
 
   if (!options.unattended) {
     context.pushNotification = async (message) => {
       if (Date.now() - lastTypedAt < USER_ACTIVE_MS) return { sent: false, reason: 'the user is at the terminal, so your output already reaches them.' };
-      if (sendDesktopNotification(message)) return { sent: true, reason: 'shown as a desktop notification.' };
+      if ((options.desktopNotification ?? sendDesktopNotification)(message)) return { sent: true, reason: 'shown as a desktop notification.' };
       if (process.stdout.isTTY) {
         // OSC 9, which many terminals show as a notification.
         process.stdout.write(`\x1b]9;${message.replace(/[\x00-\x1f\x7f]/g, ' ')}\x07`);
@@ -1005,7 +1131,6 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     autoCompact: settings.autoCompact,
     watcher: agentWatcher,
     onPromptStart: () => {
-      lastTypedAt = Date.now();
       void refreshSkills();
       if (!titled) {
         titled = true;
@@ -1064,6 +1189,44 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     if (persist) context.checkpoints = new CheckpointStore(next.id);
   };
 
+  /**
+   * For /clear and /resume, which leave the conversation that started this work. /branch keeps
+   * it running, because the copy has the history its reports refer to. Durable scheduled jobs
+   * belong to the project and go on. Says what was stopped.
+   */
+  const stopBackgroundWork = (): string | undefined => {
+    const running = tasks.running();
+    const monitors = running.filter((task) => task.kind === 'monitor').length;
+    // None of these report being stopped, so nothing new arrives for the next conversation.
+    const loopStopped = loops?.stop() ?? false;
+    const jobs = (cron?.forgetSession() ?? []).filter((job) => job.origin !== 'wakeup');
+    const counts: [number, string][] = [
+      [registry.running(), 'agent'],
+      [running.length - monitors, 'shell command'],
+      [monitors, 'monitor'],
+      [jobs.length, 'scheduled job'],
+      [loopStopped ? 1 : 0, 'self-paced loop'],
+    ];
+    registry.stopAll();
+    tasks.stopAll();
+    // After the stops, which can flush a monitor's last events. A run of a durable job that came
+    // due while the session was busy is the project's, so it goes on waiting; everything else
+    // waiting is the old conversation's news.
+    const durableRuns = new Set((cron?.list() ?? []).filter((job) => job.durable).map((job) => `cron:${job.id}`));
+    wakes.discard((prompt) => prompt.key !== undefined && durableRuns.has(prompt.key));
+    const parts = counts.filter(([count]) => count > 0).map(([count, what]) => `${count} ${what}${count === 1 ? '' : 's'}`);
+    if (parts.length === 0) return undefined;
+    const kept = jobs.length > 0 && cron?.persistent ? ' Its scheduled jobs come back if you resume it.' : '';
+    return `Stopped what the previous conversation left running: ${parts.join(', ')}.${kept}`;
+  };
+  /** Switches conversation, leaving behind the work and news of the one before, and bringing back the saved jobs of the one it resumes. */
+  const leaveFor = (next: SessionStore, messages: Message[], nextSystem?: SystemBlock[], resumed = false): { stopped?: string; restored?: string } => {
+    const stopped = stopBackgroundWork();
+    switchTo(next, messages, nextSystem);
+    const restored = resumed ? (cron?.restore(next.id) ?? []) : [];
+    return { ...(stopped ? { stopped } : {}), ...(restored.length > 0 ? { restored: restoredJobs(restored) } : {}) };
+  };
+
   return {
     agent,
     engine,
@@ -1116,6 +1279,8 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       if (name) next.appendName(name);
       sessionName = name;
       switchTo(next, messages);
+      // The conversation goes on here, so its scheduled jobs come back when this copy is resumed.
+      cron?.adopt(next.id);
     },
     renameSession: (name) => {
       store.appendName(name);
@@ -1129,11 +1294,15 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     wakes,
     backgroundAgents: registry,
     cron,
+    loops,
     planFile: () => planPath,
     worktreeSession: () =>
       worktreeState ? { path: worktreeState.path, created: worktreeState.created, ...(worktreeState.worktree ? { branch: worktreeState.worktree.branch } : {}) } : undefined,
     exitWorktree,
     noteForModel: (text) => mainWatcher!.note(text),
+    noteUserActivity: () => {
+      lastTypedAt = Date.now();
+    },
     suggestName: async (signal) => {
       const transcript = agent.messages
         .flatMap((message) => message.content.flatMap((block) => (block.type === 'text' ? [`${message.role}: ${block.text}`] : [])))
@@ -1147,20 +1316,21 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     newSession: () => {
       const next = persist ? SessionStore.create(projectDir, agent.model) : SessionStore.ephemeral();
       next.appendSystem(agent.systemBlocks);
-      switchTo(next, []);
+      return leaveFor(next, []);
     },
     resumeSession: (id) => {
       const restored = restoreHistory(projectDir, id);
       const reopened = SessionStore.open(projectDir, id);
-      if (!restored || !reopened) return false;
+      if (!restored || !reopened) return null;
       if (restored.repairs) reopened.appendMessage(restored.repairs);
-      switchTo(reopened, restored.messages, restored.system);
-      return true;
+      return leaveFor(reopened, restored.messages, restored.system, true);
     },
     shutdown: async () => {
       registry.stopAll();
       cron?.stopAll();
       tasks.stopAll();
+      // What has not exited yet gets KILL from it after a grace period, which Cairn, exiting, cannot send.
+      reaper.close();
       await created.sandbox?.close();
       await mcp.close();
       await hooks.run('SessionEnd', common());

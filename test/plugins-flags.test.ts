@@ -815,7 +815,31 @@ describe('slash commands', () => {
     assert.match(await slash(runtime, '/tasks'), /long job/);
     assert.match(await slash(runtime, `/tasks stop ${task.id}`), /Stopped/);
     assert.equal(task.status, 'stopped');
+    assert.match(await slash(runtime, `/tasks stop ${task.id}`), /not running \(stopped\)/);
     assert.match(await slash(runtime, '/tasks stop nope'), /No task/);
+    await runtime.shutdown();
+  });
+
+  it('/tasks lists and stops background agents and scheduled jobs too', async () => {
+    const provider = new ScriptedProvider({
+      rules: [
+        { regex: '^go$', steps: [{ toolCalls: [{ name: 'Agent', input: { description: 'slow worker', prompt: 'slow task' } }] }, { text: 'ok' }] },
+        { match: 'slow task', steps: [{ text: 'never', delayMs: 30_000 }] },
+      ],
+    });
+    const runtime = await createRuntime({ cwd: dir, provider, persist: false, prompter: allowAll, mode: 'bypassPermissions', backgroundAgents: true });
+    await drain(runtime, 'go');
+    const job = runtime.cron!.create('7 9 * * *', 'morning check', true);
+    const listing = await slash(runtime, '/tasks');
+    assert.match(listing, /Agents:\n {2}a\S+ {2}running {3}slow worker \(general-purpose\)/);
+    assert.match(listing, /Scheduled:\n.*morning check {2}\(7 9 \* \* \*\)/);
+
+    const agent = runtime.backgroundAgents.list()[0]!;
+    assert.equal(await slash(runtime, `/tasks stop ${agent.id}`), `Stopped agent ${agent.id} (slow worker).`);
+    assert.equal(runtime.backgroundAgents.running(), 0);
+    assert.match(await slash(runtime, `/tasks stop ${agent.id}`), /not running \(stopped\)/);
+    assert.equal(await slash(runtime, `/tasks stop ${job.id}`), `Cancelled scheduled job ${job.id}.`);
+    assert.deepEqual(runtime.cron!.list(), []);
     await runtime.shutdown();
   });
 

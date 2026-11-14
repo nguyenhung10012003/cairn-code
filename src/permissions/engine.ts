@@ -256,7 +256,9 @@ export class PermissionEngine {
     if (hook === 'ask') return { behavior: 'ask', reason: 'A hook requires confirmation' };
     if (hook === 'allow') return { behavior: 'allow', reason: 'Approved by a hook' };
     if (this.rulesFor('allow', toolName).some(matches)) return { behavior: 'allow', reason: 'Approved by an allow rule' };
-    return { behavior: 'ask', reason: `${toolName} needs your approval`, suggestions: [{ rule: toolName, persist: false }] };
+    // A rule names the specifier, so approving one kind of call, such as a durable job, leaves the others asking.
+    const rule = specifier === undefined ? toolName : `${toolName}(${specifier})`;
+    return { behavior: 'ask', reason: `${toolName} needs your approval`, suggestions: [{ rule, persist: false }] };
   }
 
   private evaluateRead(toolName: string, paths: string[], hook: HookVerdict): Decision {

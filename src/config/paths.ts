@@ -24,8 +24,8 @@ export function userSettingsPath(): string {
 
 /**
  * The folder this machine keeps for one project, outside the repository, named by a hash of the
- * project's path. It holds the project's settings and saved approvals, its local MCP servers and
- * its memory. The repository's own `.cairn/` folder is for the user to create, and overrides it.
+ * project's path. It holds the project's settings and saved approvals, its local MCP servers, its
+ * memory and its saved scheduled jobs. The repository's own `.cairn/` folder is for the user to create, and overrides it.
  */
 export function workspaceDir(projectDir: string): string {
   return join(appHome(), 'workspaces', createHash('sha256').update(projectDir).digest('hex').slice(0, 16));
@@ -41,6 +41,16 @@ export function workspaceMcpPath(projectDir: string): string {
 
 export function workspaceMemoryDir(projectDir: string): string {
   return join(workspaceDir(projectDir), 'memory');
+}
+
+/** Scheduled prompts kept for later: for a session when it is resumed, and durable ones for any session. */
+export function workspaceScheduledPath(projectDir: string): string {
+  return join(workspaceDir(projectDir), 'scheduled-tasks.json');
+}
+
+/** One empty file per job run a session has claimed, so two sessions never run the same one. */
+export function workspaceScheduledRunsDir(projectDir: string): string {
+  return join(workspaceDir(projectDir), 'scheduled-runs');
 }
 
 export function projectSettingsPath(cwd: string): string {

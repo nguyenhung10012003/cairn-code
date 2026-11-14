@@ -13,6 +13,8 @@ const DEFAULT_TIMEOUT_MS = 300_000;
 const MAX_TIMEOUT_MS = 1_800_000;
 const MIN_TIMEOUT_MS = 1_000;
 const BATCH_MS = 200;
+/** How long an idle conversation waits after an event before its turn, for more to join it. */
+export const IDLE_SETTLE_MS = 1_500;
 /** A monitor sending more notifications than this in a minute is stopped. */
 const MAX_EVENTS_PER_MINUTE = 60;
 const MAX_EVENT_CHARS = 4_000;
@@ -82,7 +84,7 @@ For poll loops checking job state, emit on every terminal status (\`succeeded|fa
 
 **Output volume**: Every stdout line is a conversation message, so the filter should be selective — but selective means "the lines you'd act on," not "only good news." Never pipe raw logs; filter to exactly the success and failure signals you care about. Monitors that produce too many events are automatically stopped; restart with a tighter filter if this happens.
 
-Stdout lines within ${BATCH_MS}ms are batched into a single notification, so multiline output from a single event groups naturally.
+Stdout lines within ${BATCH_MS}ms are batched into a single notification, so multiline output from a single event groups naturally. While you are idle, an event waits ${IDLE_SETTLE_MS / 1000}s before it wakes you, so events close together arrive in one turn.
 
 The script runs in the same shell environment as Bash. Exit ends the watch (exit code is reported). Every monitor expires after \`timeout_ms\` (default 5 minutes, at most 30 minutes): it is killed and you get one notice with the event count. Re-arm it if you still need the watch; for a long watch (PR monitoring, log tails) set \`timeout_ms\` to the maximum and re-arm on each expiry, and widen the filter if an expiry with no events was unexpected. Use TaskStop to cancel early.
 **ws source** — open a WebSocket and stream each incoming text frame as an event. No shell, no polling: the server pushes, you get notified.
@@ -183,7 +185,8 @@ class Watch {
     this.recent.push(now);
     while (this.recent.length > 0 && now - this.recent[0]! > 60_000) this.recent.shift();
     this.events++;
-    this.ctx.notify!(`<task-notification>\nMonitor event: ${this.label}\n${lines}\n</task-notification>`);
+    // Events in a burst wake an idle conversation once. How the watch ends wakes it at once.
+    this.ctx.notify!(`<task-notification>\nMonitor event: ${this.label}\n${lines}\n</task-notification>`, { settleMs: IDLE_SETTLE_MS });
     if (this.recent.length > MAX_EVENTS_PER_MINUTE) {
       this.end('stopped', `was stopped: more than ${MAX_EVENTS_PER_MINUTE} notifications in a minute. Restart it with a tighter filter`);
     }
@@ -212,6 +215,8 @@ function startCommand(command: string, description: string, timeoutMs: number, c
   const child = spawn(target.file, target.args, { cwd: ctx.cwd(), detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: target.env });
   pid = child.pid;
   child.unref();
+  const release = ctx.tasks.guard(pid);
+  child.once('exit', release);
   watch = new Watch(label, ctx, timeoutMs, () => {
     if (pid === undefined) return;
     killTree(pid, 'SIGTERM');

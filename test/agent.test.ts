@@ -716,7 +716,7 @@ describe('resuming with a frozen system prompt', () => {
     assert.equal(JSON.stringify(fork.provider.requests[0]!.system), original);
 
     const later = await harness([{ text: 'three' }], { dir });
-    assert.equal(later.runtime.resumeSession(id), true);
+    assert.deepEqual(later.runtime.resumeSession(id), {});
     await collect(later.runtime, 'go');
     assert.equal(JSON.stringify(later.provider.requests[0]!.system), original);
   });

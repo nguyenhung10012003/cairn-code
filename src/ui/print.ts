@@ -3,6 +3,7 @@ import { parseSlash, resolveExtensionCommand, settleCommand } from '../commands/
 import type { AgentEvent } from '../core/agent.ts';
 import type { ContentBlock, Message } from '../core/messages.ts';
 import type { Runtime } from '../core/runtime.ts';
+import { followBackgroundWork } from '../core/wakes.ts';
 import type { SkillActivation } from '../skills/skills.ts';
 import type { PermissionAnswer, PermissionPrompt, Prompter } from '../tools/types.ts';
 import { sanitize } from './render.ts';
@@ -169,7 +170,11 @@ export async function runPrint(runtime: Runtime, prompt: string, options: PrintO
     }
   };
 
-  const runTurn = async (input: string): Promise<boolean> => {
+  /**
+   * With `follow`, the run goes on while its background commands do: the model gets a turn when
+   * each ends, as in an interactive session, and the result is its last answer.
+   */
+  const runTurn = async (input: string, follow: boolean): Promise<boolean> => {
     // `cairn -p "/review src/a.ts"` runs the skill. Built-in commands only make sense interactively.
     let text = input;
     let activation: SkillActivation | undefined;
@@ -188,9 +193,20 @@ export async function runPrint(runtime: Runtime, prompt: string, options: PrintO
     let last: Extract<AgentEvent, { type: 'turn_end' }> | undefined;
     let turns = 0;
     const started = Date.now();
-    for await (const event of runtime.agent.run(text, controller.signal, activation)) {
+    const turn = runtime.agent.run(text, controller.signal, activation);
+    const events = follow
+      ? followBackgroundWork(turn, {
+          resume: (signal) => runtime.agent.resumeForNotes(signal),
+          note: (note) => runtime.noteForModel(note),
+          tasks: runtime.context.tasks,
+          wakes: runtime.wakes,
+          signal: controller.signal,
+        })
+      : turn;
+    for await (const event of events) {
       if (event.type === 'usage') turns++;
-      if (event.type === 'turn_end') last = event;
+      // A follow-up turn that ends without text leaves the answer before it as the result.
+      if (event.type === 'turn_end') last = event.text || !last ? event : { ...event, text: last.text };
       if (event.type === 'notice') process.stderr.write(`${sanitize(event.text)}\n`);
       if (settings.verbose && format === 'text' && event.type === 'tool_start') process.stderr.write(`[tool] ${sanitize(event.name)}\n`);
       if (format === 'stream-json') {
@@ -249,12 +265,13 @@ export async function runPrint(runtime: Runtime, prompt: string, options: PrintO
         succeeded = false;
         continue;
       }
-      succeeded = (await runTurn(parsed)) && succeeded;
+      // The next line may come at any time, so a background command's news waits for it.
+      succeeded = (await runTurn(parsed, false)) && succeeded;
       if (controller.signal.aborted) break;
     }
   } else {
-    succeeded = await runTurn(prompt);
-    // Commands left running in the background get to finish, up to their time limit.
+    succeeded = await runTurn(prompt, true);
+    // After a turn that failed, or the last follow-up, what is still running gets to finish, up to its time limit.
     await runtime.context.tasks.waitForAll(controller.signal);
   }
   process.off('SIGINT', onSignal);

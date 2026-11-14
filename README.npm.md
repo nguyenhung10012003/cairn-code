@@ -95,11 +95,12 @@ In a session, `/provider` opens a list of providers: type to narrow it, use `↑
 | `/plan` | Plan mode: the agent only reads, then asks you to approve a plan |
 | `/rewind` | Undo file changes from the last turn, or the last N turns |
 | `/compact` | Summarize the conversation to free up context |
-| `/clear`, `/resume`, `/rename` | Start a new conversation on a clear screen, go back to an earlier one, or name this one |
+| `/clear`, `/resume`, `/rename` | Start a new conversation on a clear screen, go back to an earlier one, or name this one. `/clear` and `/resume` stop the background work the old conversation left running |
 | `/btw <question>` | Ask a side question without adding it to the conversation |
+| `/loop [interval] [prompt]` | Run a prompt again and again: `/loop 5m check the deploy` on a schedule, `/loop check the deploy` at a pace the model picks, `/loop` alone for a default prompt that tends unfinished work and the branch's pull request. `Esc` stops a self-paced loop while it waits, and `/loop stop` stops them all |
 | `/cost`, `/context`, `/status` | Tokens and estimated cost, how full the context is, session details |
 | `/usage` | Tokens and estimated cost on a screen of their own, in tabs: this session, then per day, project and session, like `cairn usage`. `←` `→` switch tabs and `Esc` goes back. `/usage daily`, `/usage projects` or `/usage sessions` opens on that tab |
-| `/tasks`, `/todos` | Background commands, and the agent's checklist |
+| `/tasks`, `/todos` | Background commands, agents and scheduled jobs, any of which `/tasks stop <id>` stops; and the agent's checklist |
 | `/mcp`, `/skills`, `/agents` | MCP servers, skills and agents in use |
 | `/init` | Write a `CAIRN.md` with notes about this project |
 | `/exit` | Quit |
@@ -178,7 +179,7 @@ Replies come from a built-in script instead of a model. Type `help` to see what 
 
 ## Your data
 
-Cairn keeps its files in `~/.cairn` (or `CAIRN_HOME`): settings, saved keys, session transcripts, file checkpoints and memory. Each transcript also records the tokens and estimated cost of every response, which `cairn usage` totals per day, `cairn usage projects` per project and `cairn usage sessions` per session; add `--since`, `--until`, `--project <path>` or `--json`. `cairn purge --dry-run` lists the workspace folder (settings, saved approvals, MCP servers and memory), transcripts, file history and logs stored for the current project, and `cairn purge --yes` deletes them. The project's own files, `.cairn/` included, are not touched.
+Cairn keeps its files in `~/.cairn` (or `CAIRN_HOME`): settings, saved keys, session transcripts, file checkpoints and memory. Each transcript also records the tokens and estimated cost of every response, which `cairn usage` totals per day, `cairn usage projects` per project and `cairn usage sessions` per session; add `--since`, `--until`, `--project <path>` or `--json`. Scheduled prompts are saved in the workspace folder too: a session's come back when you resume it, and those the model makes durable run in every later session of the project. `cairn purge --dry-run` lists the workspace folder (settings, saved approvals, MCP servers, memory and scheduled jobs), transcripts, file history and logs stored for the current project, and `cairn purge --yes` deletes them. The project's own files, `.cairn/` included, are not touched.
 
 ## Versions
 

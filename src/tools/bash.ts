@@ -98,6 +98,8 @@ function runForeground(command: string, timeoutMs: number, options: CommandOptio
       stdio: ['ignore', 'pipe', 'pipe'],
       env: target.env,
     });
+    // Released when it ends here. Moved to the background, the registry looks after it instead.
+    const release = ctx.tasks.guard(child.pid);
     let timedOut = false;
     let settled = false;
     let forceKill: NodeJS.Timeout | undefined;
@@ -137,6 +139,7 @@ function runForeground(command: string, timeoutMs: number, options: CommandOptio
     const finish = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (settled) return;
       settled = true;
+      release();
       clearTimeout(timer);
       if (forceKill) clearTimeout(forceKill);
       ctx.signal.removeEventListener('abort', onAbort);

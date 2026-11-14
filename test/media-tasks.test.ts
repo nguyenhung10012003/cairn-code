@@ -1,17 +1,21 @@
-/** Reading pictures, PDFs and notebooks, and commands running in the background. */
+/** Reading pictures, PDFs and notebooks, commands running in the background, and scheduled prompts. */
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { describe, it } from 'bun:test';
+import { describe, it, setSystemTime } from 'bun:test';
+import { runSlashCommand } from '../src/commands/slash.ts';
 import { createRuntime } from '../src/core/runtime.ts';
+import { WakeQueue } from '../src/core/wakes.ts';
 import { toApiMessages } from '../src/providers/anthropic.ts';
 import { ScriptedProvider } from '../src/providers/scripted.ts';
 import { bashTool } from '../src/tools/bash.ts';
 import { readTool } from '../src/tools/files.ts';
 import { countPdfPages, imageMediaType, parsePageRange } from '../src/tools/media.ts';
+import { monitorTool } from '../src/tools/monitor.ts';
 import { notebookEditTool } from '../src/tools/notebook.ts';
+import { Reaper } from '../src/tools/reaper.ts';
 import { TaskRegistry, taskStopTool } from '../src/tools/tasks.ts';
 import { FileTracker } from '../src/tools/types.ts';
 import type { Prompter, ToolContext } from '../src/tools/types.ts';
@@ -51,6 +55,9 @@ const until = async (condition: () => boolean, ms = 5_000): Promise<void> => {
   while (!condition() && Date.now() < deadline) await Bun.sleep(20);
   assert.ok(condition(), 'timed out waiting');
 };
+
+/** A request whose newest message says this, such as a note that woke the conversation. */
+const asked = (provider: ScriptedProvider, pattern: RegExp): boolean => provider.requests.some((request) => pattern.test(JSON.stringify(request.messages.at(-1))));
 
 describe('Read for pictures', () => {
   it('returns the image as an attachment, with its real type', async () => {
@@ -344,31 +351,138 @@ describe('background commands', () => {
     await runtime.shutdown();
   });
 
-  it('stops what a subagent started when that subagent ends', async () => {
+  it('stops its background commands when Cairn\'s process dies without stopping them', async () => {
+    const dir = tempDir();
+    const script = join(dir, 'crash.ts');
+    const source = (path: string): string => JSON.stringify(resolve(import.meta.dirname, '..', path));
+    writeFileSync(
+      script,
+      `import { Reaper } from ${source('src/tools/reaper.ts')};
+import { TaskRegistry } from ${source('src/tools/tasks.ts')};
+const tasks = new TaskRegistry({ logDir: ${JSON.stringify(join(dir, 'logs'))}, reaper: new Reaper() });
+const task = tasks.start('/bin/sh', ['-c', 'sleep 30'], { command: 'sleep 30', cwd: ${JSON.stringify(dir)}, env: process.env });
+console.log(task.pid);
+// As a crash or kill -9 would: no shutdown, no exit handlers.
+setTimeout(() => process.kill(process.pid, 'SIGKILL'), 300);
+`,
+    );
+    const result = spawnSync(process.execPath, [script], { encoding: 'utf8', timeout: 10_000 });
+    const pid = Number(result.stdout.trim());
+    assert.ok(pid > 0, result.stderr);
+    const alive = (): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      await until(() => !alive(), 6_000);
+    } finally {
+      if (alive()) process.kill(-pid, 'SIGKILL');
+    }
+  });
+
+  it('gives the process that stops orphans none of Cairn\'s environment', async () => {
+    process.env.CAIRN_TEST_SECRET = 'sk-should-not-leak';
+    const reaper = new Reaper();
+    const sleeper = spawn('/bin/sh', ['-c', 'sleep 5'], { detached: true, stdio: 'ignore' });
+    try {
+      reaper.add(sleeper.pid);
+      await until(() => reaper.pid !== undefined);
+      const environment =
+        process.platform === 'linux'
+          ? readFileSync(`/proc/${reaper.pid}/environ`, 'utf8')
+          : spawnSync('ps', ['-wwE', '-o', 'command=', '-p', String(reaper.pid)], { encoding: 'utf8' }).stdout;
+      assert.match(environment, /PATH=/, 'the environment can be seen at all');
+      assert.doesNotMatch(environment, /sk-should-not-leak/);
+    } finally {
+      delete process.env.CAIRN_TEST_SECRET;
+      reaper.remove(sleeper.pid);
+      reaper.close();
+      sleeper.kill('SIGKILL');
+    }
+  });
+
+  it('empties a running command\'s log once it passes the size limit, and the command keeps writing', async () => {
+    const dir = tempDir();
+    const tasks = new TaskRegistry({ logDir: join(dir, 'logs'), maxLogBytes: 1_000 });
+    const marker = join(dir, 'later');
+    const task = tasks.start('/bin/sh', ['-c', `head -c 5000 /dev/zero | tr '\\\\0' x; sleep 3; echo after; touch ${marker}`], { command: 'chatty', cwd: dir, env: process.env })!;
+    await until(() => readFileSync(task.logPath, 'utf8').includes('Cairn emptied it'), 5_000);
+    await until(() => existsSync(marker), 6_000);
+    await Bun.sleep(50);
+    const log = readFileSync(task.logPath, 'utf8');
+    assert.match(log, /^\[.*this log passed 1000 bytes, so Cairn emptied it.*\]\nafter\n$/);
+    tasks.stopAll();
+  });
+
+  it('wakes a subagent when its background command exits, and its report says what came of it', async () => {
     const dir = tempDir();
     process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
-    const marker = join(dir, 'should-not-exist');
-    const provider = new ScriptedProvider([
-      { toolCalls: [{ name: 'Agent', input: { description: 'd', prompt: 'p' } }] },
-      { toolCalls: [{ name: 'Bash', input: { command: `sleep 1; touch ${marker}`, run_in_background: true } }] },
-      { text: 'sub done' },
-      { text: 'parent done' },
-    ]);
+    // Rules rather than a list, so the replies do not depend on whether the command ends before
+    // or after the subagent is told it is still running.
+    const provider = new ScriptedProvider({
+      rules: [
+        { regex: '^go$', steps: [{ toolCalls: [{ name: 'Agent', input: { description: 'd', prompt: 'build it' } }] }, { text: 'parent done' }] },
+        { match: 'build it', steps: [{ toolCalls: [{ name: 'Bash', input: { command: 'sleep 1; echo built', run_in_background: true } }] }, { text: 'started the build' }] },
+        { match: 'exited with code 0', steps: [{ text: 'the build finished' }] },
+        { match: 'still running', steps: [{ text: 'waiting for the build' }] },
+      ],
+    });
     const runtime = await createRuntime({ cwd: dir, provider, persist: false, mode: 'bypassPermissions', prompter });
     for await (const _event of runtime.agent.run('go', new AbortController().signal)) {
       // Run it to the end.
     }
+    assert.ok(asked(provider, /still running[\s\S]*sleep 1; echo built/), 'told what is still running when its turn ended');
+    assert.ok(asked(provider, /exited with code 0/), 'woken when the command exited');
+    assert.match(JSON.stringify(provider.requests.at(-1)!.messages.at(-1)), /the build finished/);
+    await runtime.shutdown();
+  });
+
+  it('stops what a subagent started when that subagent is stopped', async () => {
+    const dir = tempDir();
+    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    const marker = join(dir, 'should-not-exist');
+    const provider = new ScriptedProvider({
+      rules: [
+        { regex: '^go$', steps: [{ toolCalls: [{ name: 'Agent', input: { description: 'd', prompt: 'build it' } }] }, { text: 'parent done' }] },
+        { match: 'build it', steps: [{ toolCalls: [{ name: 'Bash', input: { command: `sleep 1; touch ${marker}`, run_in_background: true } }] }, { text: 'started' }] },
+        { match: 'still running', steps: [{ text: 'waiting' }] },
+      ],
+    });
+    const runtime = await createRuntime({ cwd: dir, provider, persist: false, mode: 'bypassPermissions', prompter });
+    const controller = new AbortController();
+    const run = (async () => {
+      for await (const _event of runtime.agent.run('go', controller.signal)) {
+        // Run it until it is stopped.
+      }
+    })();
+    await until(() => asked(provider, /still running/));
+    await Bun.sleep(50);
+    controller.abort();
+    await run;
     await Bun.sleep(1_300);
     assert.equal(existsSync(marker), false);
     await runtime.shutdown();
   });
 
-  it('keeps a print-mode run open until its background command exits', () => {
+  it('lets a print-mode run see how its background command ended before it answers', () => {
     const dir = tempDir();
     const home = tempDir('cairn-taskhome-');
     const marker = join(dir, 'finished');
     const script = join(home, 'script.json');
-    writeFileSync(script, JSON.stringify([{ toolCalls: [{ name: 'Bash', input: { command: `sleep 0.3; touch ${marker}`, run_in_background: true } }] }, { text: 'started' }]));
+    writeFileSync(
+      script,
+      JSON.stringify({
+        rules: [
+          { regex: '^go$', steps: [{ toolCalls: [{ name: 'Bash', input: { command: `sleep 0.5; touch ${marker}`, run_in_background: true } }] }, { text: 'started' }] },
+          { match: 'exited with code 0', steps: [{ text: 'it finished' }] },
+          { match: 'still running', steps: [{ text: 'waiting' }] },
+        ],
+      }),
+    );
     const result = spawnSync(process.execPath, [CLI, '--provider', 'scripted', '-p', 'go', '--dangerously-skip-permissions'], {
       cwd: dir,
       env: { ...process.env, CAIRN_HOME: home, CAIRN_SCRIPT: script },
@@ -377,7 +491,191 @@ describe('background commands', () => {
       timeout: 30_000,
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, 'started\n');
+    assert.equal(result.stdout, 'it finished\n');
     assert.equal(existsSync(marker), true);
+  });
+
+  it('stops the old conversation\'s background work on /clear, but not on /branch or a failed /resume', async () => {
+    const dir = tempDir();
+    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    const provider = new ScriptedProvider({
+      rules: [
+        {
+          regex: '^go$',
+          steps: [
+            { toolCalls: [{ name: 'Agent', input: { description: 'slow', prompt: 'slow task' } }, { name: 'Bash', input: { command: 'sleep 30', run_in_background: true } }] },
+            { text: 'ok' },
+          ],
+        },
+        { match: 'slow task', steps: [{ text: 'never', delayMs: 30_000 }] },
+      ],
+    });
+    const runtime = await createRuntime({ cwd: dir, provider, persist: false, mode: 'bypassPermissions', prompter, backgroundAgents: true });
+    for await (const _event of runtime.agent.run('go', new AbortController().signal)) {
+      // Run it to the end.
+    }
+    runtime.cron!.create('7 9 * * *', 'morning check', true);
+    const running = (): number[] => [runtime.backgroundAgents.running(), runtime.context.tasks.running().length, runtime.cron!.list().length];
+    assert.deepEqual(running(), [1, 1, 1]);
+
+    runtime.forkSession();
+    assert.equal(runtime.resumeSession('no-such-session'), null);
+    assert.deepEqual(running(), [1, 1, 1], 'the branch has the history the work belongs to');
+
+    const cleared = await runSlashCommand('/clear', runtime, { choose: async () => null });
+    assert.equal(cleared.notice, 'Stopped what the previous conversation left running: 1 agent, 1 shell command, 1 scheduled job.');
+    assert.deepEqual(running(), [0, 0, 0]);
+    await Bun.sleep(100);
+    assert.equal(runtime.wakes.pending(), false, 'nothing reports to the new conversation');
+    assert.equal((await runSlashCommand('/clear', runtime, { choose: async () => null })).notice, undefined);
+    await runtime.shutdown();
+  });
+});
+
+describe('background agents', () => {
+  /** Three Agent calls in one response, each for a subagent that takes `delayMs` to answer. */
+  const threeAtOnce = (delayMs: number): ScriptedProvider =>
+    new ScriptedProvider({
+      rules: [
+        {
+          regex: '^go$',
+          steps: [
+            { toolCalls: [1, 2, 3].map((n) => ({ name: 'Agent', input: { description: `job ${n}`, prompt: `slow job ${n}` } })) },
+            { text: 'ok' },
+          ],
+        },
+        { match: 'slow job', steps: [{ text: 'done', delayMs }] },
+      ],
+    });
+  const results = (provider: ScriptedProvider): string[] =>
+    provider.requests.flatMap((request) => request.messages.at(-1)!.content.flatMap((block) => (block.type === 'tool_result' ? [String(block.content)] : [])));
+
+  for (const background of [true, false]) {
+    it(`refuses a subagent past the limit of how many run at once${background ? ', in the background' : ', inline'}`, async () => {
+      const dir = tempDir();
+      process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+      process.env.CAIRN_MAX_CONCURRENT_SUBAGENTS = '2';
+      try {
+        const provider = threeAtOnce(background ? 30_000 : 200);
+        const runtime = await createRuntime({ cwd: dir, provider, persist: false, mode: 'bypassPermissions', prompter, backgroundAgents: background });
+        for await (const _event of runtime.agent.run('go', new AbortController().signal)) {
+          // Run it to the end.
+        }
+        const refused = results(provider).filter((text) => /2 subagents are already running, the most at once/.test(text));
+        assert.equal(refused.length, 1, results(provider).join('\n---\n'));
+        await runtime.shutdown();
+      } finally {
+        delete process.env.CAIRN_MAX_CONCURRENT_SUBAGENTS;
+      }
+    });
+  }
+
+  it('gives a message that came during an agent\'s last request a turn of its own once it is done', async () => {
+    const dir = tempDir();
+    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    const provider = new ScriptedProvider({
+      rules: [
+        { regex: '^go$', steps: [{ toolCalls: [{ name: 'Agent', input: { description: 'worker', prompt: 'do the work' } }] }, { text: 'launched' }] },
+        // Its only request ends the turn, so no tool round is left for a message to arrive at.
+        { match: 'do the work', steps: [{ text: 'work report', delayMs: 300 }] },
+        { match: 'also check X', steps: [{ text: 'X is fine' }] },
+      ],
+    });
+    const runtime = await createRuntime({ cwd: dir, provider, persist: false, mode: 'bypassPermissions', prompter, backgroundAgents: true });
+    for await (const _event of runtime.agent.run('go', new AbortController().signal)) {
+      // Run it to the end.
+    }
+    await until(() => asked(provider, /do the work/));
+    assert.match(await runtime.backgroundAgents.send('worker', 'also check X', 'main'), /Delivered/);
+    await until(() => asked(provider, /also check X/) && runtime.backgroundAgents.list()[0]!.status === 'completed');
+
+    for await (const _event of runtime.agent.resumeForNotes(new AbortController().signal)) {
+      // The main conversation hears from it.
+    }
+    const heard = JSON.stringify(provider.requests.at(-1)!.messages.at(-1));
+    assert.match(heard, /work report/, 'the report it finished with still arrives');
+    assert.match(heard, /X is fine/);
+    await runtime.shutdown();
+  });
+});
+
+describe('monitors', () => {
+  it('a burst of notes that may wait wakes an idle session once, and one that may not takes them along', async () => {
+    const wakes = new WakeQueue();
+    let woken = 0;
+    wakes.onWake(() => woken++);
+    wakes.notify(100);
+    wakes.notify(100);
+    await Bun.sleep(30);
+    wakes.notify(100);
+    assert.equal(woken, 0);
+    assert.equal(wakes.pending(), true);
+    await Bun.sleep(120);
+    assert.equal(woken, 1);
+    wakes.notify(100);
+    wakes.notify();
+    assert.equal(woken, 2);
+    await Bun.sleep(150);
+    assert.equal(woken, 2);
+  });
+
+  it('wakes the conversation once for events that come close together', async () => {
+    const dir = tempDir();
+    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    const runtime = await createRuntime({ cwd: dir, provider: new ScriptedProvider([]), persist: false, mode: 'bypassPermissions', prompter });
+    let woken = 0;
+    runtime.wakes.onWake(() => woken++);
+    const ctx = { ...runtime.context, signal: new AbortController().signal };
+    const started = await monitorTool.execute({ description: 'two events', timeout_ms: 10_000, command: "printf 'one\\n'; sleep 0.5; printf 'two\\n'; sleep 5" }, ctx);
+    // Both events have come by then: the second about 0.7 seconds in, and the settled wake at 1.5.
+    await Bun.sleep(2_500);
+    assert.equal(woken, 1);
+    assert.equal(runtime.wakes.take().notes, true);
+    const id = /task (\w+)/.exec(started.content as string)![1]!;
+    runtime.context.tasks.stop(id);
+    await runtime.shutdown();
+  });
+});
+
+describe('scheduled prompts', () => {
+  it('runs a prompt that came due several times while busy once', () => {
+    const wakes = new WakeQueue();
+    assert.equal(wakes.prompt('check the deploy', 'cron:a'), true);
+    assert.equal(wakes.prompt('check the deploy', 'cron:a'), false);
+    wakes.prompt('check the deploy', 'cron:a');
+    wakes.prompt('look at CI', 'cron:b');
+    wakes.prompt('typed twice');
+    wakes.prompt('typed twice');
+    assert.deepEqual(wakes.take().prompts.map((prompt) => prompt.text), ['check the deploy', 'look at CI', 'typed twice', 'typed twice']);
+    // Once its run has started, the job's next match is a new run.
+    assert.equal(wakes.prompt('check the deploy', 'cron:a'), true);
+  });
+
+  it('does not take a scheduled prompt for the user being at the terminal', async () => {
+    const dir = tempDir();
+    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    const shown: string[] = [];
+    const runtime = await createRuntime({
+      cwd: dir,
+      provider: new ScriptedProvider([{ text: 'checked' }]),
+      persist: false,
+      prompter,
+      desktopNotification: (message) => shown.push(message) > 0,
+    });
+    const push = runtime.context.pushNotification!;
+    runtime.noteUserActivity();
+    assert.match((await push('too soon')).reason, /at the terminal/);
+    setSystemTime(new Date(Date.now() + 2 * 60_000));
+    try {
+      // What a job coming due does: a prompt nobody typed.
+      for await (const _event of runtime.agent.run('check the deploy', new AbortController().signal)) {
+        // Run it to the end.
+      }
+      assert.deepEqual(await push('deploy finished'), { sent: true, reason: 'shown as a desktop notification.' });
+      assert.deepEqual(shown, ['deploy finished']);
+    } finally {
+      setSystemTime();
+    }
+    await runtime.shutdown();
   });
 });

@@ -91,7 +91,7 @@ function pathsToPurge(project: string): string[] {
 }
 
 const PURGE_USAGE =
-  "Usage: cairn purge [path] [--dry-run] [--yes]\nDeletes this machine's data for a project: its workspace folder (settings, saved approvals, MCP servers and memory), transcripts, file history and logs, and its trust entry. The project's own files, .cairn/ included, are not touched.\n";
+  "Usage: cairn purge [path] [--dry-run] [--yes]\nDeletes this machine's data for a project: its workspace folder (settings, saved approvals, MCP servers, memory and scheduled jobs), transcripts, file history and logs, and its trust entry. The project's own files, .cairn/ included, are not touched.\n";
 
 /** Deletes data that cannot be recovered, so it says exactly what first and needs --yes to act. */
 export function runPurge(args: string[], cwd: string): number {

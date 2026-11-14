@@ -83,6 +83,9 @@ export interface AgentControl {
   stop(idOrDescription: string): AgentSummary | undefined;
 }
 
+/** What made a scheduled job: CronCreate, /loop with an interval, or a self-paced loop's next iteration. */
+export type JobOrigin = 'tool' | 'loop' | 'wakeup';
+
 export interface CronJobInfo {
   id: string;
   cron: string;
@@ -90,12 +93,26 @@ export interface CronJobInfo {
   recurring: boolean;
   nextRun: Date | null;
   expiresAt?: Date;
+  /** Belongs to the project, and runs in its later sessions too. */
+  durable: boolean;
+  origin: JobOrigin;
+  /** Runs the /loop default prompt as it reads when the job is due. */
+  loopDefault?: boolean;
 }
 
 export interface CronControl {
-  create(cron: string, prompt: string, recurring: boolean): CronJobInfo;
+  create(cron: string, prompt: string, recurring: boolean, options?: { durable?: boolean }): CronJobInfo;
   delete(id: string): boolean;
   list(): CronJobInfo[];
+  /** Jobs are saved for later sessions. */
+  readonly persistent: boolean;
+  /** Why saved jobs cannot be changed right now, such as an unreadable file. */
+  storageProblem(): string | undefined;
+}
+
+/** The self-paced /loop, as ScheduleWakeup sees it. */
+export interface LoopControl {
+  schedule(request: { delaySeconds?: number; reason?: string; stop?: boolean }): ToolOutput;
 }
 
 export interface WorktreeControl {
@@ -173,11 +190,15 @@ export interface ToolContext {
   agents?: AgentControl;
   /** This agent's id, when it is a subagent, so its messages can say who sent them. */
   agentId?: string;
-  /** Puts a note into this agent's conversation, such as a monitor event, and wakes it if idle. */
-  notify?(text: string): void;
+  /**
+   * Puts a note into this agent's conversation, such as a monitor event, and wakes it if idle.
+   * With `settleMs`, waking waits that long, so notes that follow start the same turn.
+   */
+  notify?(text: string, options?: { settleMs?: number }): void;
   /** The plan file for this session, and the way into and out of plan mode. */
   planMode?: { file(): string; enter(): void; exit(): void };
   cron?: CronControl;
+  loop?: LoopControl;
   worktrees?: WorktreeControl;
   /** Shows a desktop notification. Returns what happened, such as that it was not needed. */
   pushNotification?(message: string): Promise<{ sent: boolean; reason: string }>;

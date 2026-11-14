@@ -13,8 +13,10 @@ export interface SubagentHandle {
   type: string;
   /** Runs one turn with this prompt, and resolves with its final text or why it failed. */
   run(prompt: string, signal: AbortSignal): Promise<{ text: string; failure?: string }>;
-  /** Delivers a note that the agent sees at its next tool round. */
+  /** Delivers a message that the agent sees at its next tool round. */
   note(text: string): void;
+  /** Takes the messages it has not seen, because they came while it was finishing. */
+  unseen(): string[];
   /** Stops what it started and cleans up. Returns a line to add to its report, if any. */
   dispose(): string | undefined;
 }
@@ -29,6 +31,8 @@ interface AgentRecord {
 
 export interface RegistryOptions {
   create(request: Omit<SubagentRequest, 'signal'>, id: string): Promise<SubagentHandle>;
+  /** Throws when one more subagent would be too many at once, counting `running` from here. */
+  checkLimit?(running: number): void;
   /** Puts a note into the main conversation and wakes it. */
   notifyMain(text: string): void;
   /** A one-line notice for the person at the terminal. */
@@ -67,14 +71,23 @@ export function forkHistory(parent: Message[], directive: string): { history: Me
 export class AgentRegistry implements AgentControl {
   private readonly records = new Map<string, AgentRecord>();
   private readonly options: RegistryOptions;
+  private starting = 0;
 
   constructor(options: RegistryOptions) {
     this.options = options;
   }
 
   async start(request: Omit<SubagentRequest, 'signal'>): Promise<string> {
+    // Counted from the check on, since several Agent calls start together and creating one waits.
+    this.options.checkLimit?.(this.running());
+    this.starting++;
+    let handle: SubagentHandle;
     const id = newAgentId();
-    const handle = await this.options.create(request, id);
+    try {
+      handle = await this.options.create(request, id);
+    } finally {
+      this.starting--;
+    }
     const record: AgentRecord = { id, description: request.description, handle, status: 'running', controller: new AbortController() };
     this.records.set(id, record);
     void this.drive(record, request.prompt);
@@ -103,6 +116,16 @@ export class AgentRegistry implements AgentControl {
       ].join('\n'),
     );
     this.options.onNotice?.(`Agent "${record.description}" (${record.id}) ${record.status}.`);
+    // A message that came during its last request had no tool round left to be seen at. It goes
+    // on with it now, as if the message had come just after it finished.
+    const unseen = record.handle.unseen();
+    if (unseen.length > 0) this.resume(record, unseen.join('\n\n'));
+  }
+
+  private resume(record: AgentRecord, prompt: string): void {
+    record.status = 'running';
+    record.controller = new AbortController();
+    void this.drive(record, prompt);
   }
 
   private find(to: string): AgentRecord | undefined {
@@ -127,11 +150,10 @@ export class AgentRegistry implements AgentControl {
     if (record.id === from) throw new Error('That is you.');
     if (record.status === 'running') {
       record.handle.note(agentMessage(from, message));
-      return `Delivered to ${record.id}. It sees the message at its next tool round.`;
+      return `Delivered to ${record.id}. It sees the message at its next tool round, or right after it finishes if it is finishing now.`;
     }
-    record.status = 'running';
-    record.controller = new AbortController();
-    void this.drive(record, agentMessage(from, message));
+    this.options.checkLimit?.(this.running());
+    this.resume(record, agentMessage(from, message));
     return `Agent ${record.id} resumed with your message. You will be notified when it completes.`;
   }
 
@@ -153,8 +175,9 @@ export class AgentRegistry implements AgentControl {
     return [...this.records.values()].map((record) => this.summary(record));
   }
 
+  /** Running, or being created. */
   running(): number {
-    return [...this.records.values()].filter((record) => record.status === 'running').length;
+    return this.starting + [...this.records.values()].filter((record) => record.status === 'running').length;
   }
 
   stopAll(): void {

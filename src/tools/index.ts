@@ -1,5 +1,5 @@
 import { bashTool } from './bash.ts';
-import { cronCreateTool, cronDeleteTool, cronListTool } from './cron.ts';
+import { cronCreateTool, cronDeleteTool, cronListTool, scheduleWakeupTool } from './cron.ts';
 import { editTool, readTool, writeTool } from './files.ts';
 import { agentTool, askUserTool, enterPlanModeTool, exitPlanModeTool, listAgentsTool, sendMessageTool, todoWriteTool } from './interaction.ts';
 import { monitorTool } from './monitor.ts';
@@ -31,6 +31,7 @@ export function builtinTools(): Tool[] {
     notebookEditTool,
     pushNotificationTool,
     readTool,
+    scheduleWakeupTool,
     sendMessageTool,
     taskStopTool,
     todoWriteTool,
@@ -40,4 +41,4 @@ export function builtinTools(): Tool[] {
 }
 
 /** Only an interactive session has someone at the keyboard, and an idle prompt for events to fire into. */
-export const INTERACTIVE_ONLY_TOOLS = new Set(['CronCreate', 'CronDelete', 'CronList', 'PushNotification', 'Monitor']);
+export const INTERACTIVE_ONLY_TOOLS = new Set(['CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'PushNotification', 'Monitor']);

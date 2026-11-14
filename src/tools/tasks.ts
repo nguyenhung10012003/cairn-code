@@ -5,13 +5,17 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { closeSync, createWriteStream, mkdirSync, openSync } from 'node:fs';
+import { appendFileSync, closeSync, createWriteStream, mkdirSync, openSync, statSync, truncateSync } from 'node:fs';
 import type { WriteStream } from 'node:fs';
 import { join } from 'node:path';
+import type { Reaper } from './reaper.ts';
 import type { Tool } from './types.ts';
 
 const KILL_GRACE_MS = 2_000;
 const MAX_LIMIT_MS = 2 * 60 * 60 * 1000;
+/** A running command's log is cleared when it grows past this, so a chatty command cannot fill the disk. */
+export const MAX_LOG_BYTES = 100 * 1024 * 1024;
+const LOG_CHECK_MS = 2_000;
 
 export type TaskStatus = 'running' | 'exited' | 'stopped' | 'timed_out';
 
@@ -34,6 +38,10 @@ export interface TaskRegistryOptions {
   defaultLimitMs?: number;
   /** Tells the conversation that a command stopped. */
   onFinished?: (task: BackgroundTask, message: string) => void;
+  /** Stops what is still running if Cairn's process ends without doing so. Shared by a session's registries. */
+  reaper?: Reaper;
+  /** The size at which a running command's log is cleared. */
+  maxLogBytes?: number;
 }
 
 export function killTree(pid: number, signal: NodeJS.Signals): void {
@@ -56,11 +64,53 @@ export class TaskRegistry {
   readonly logDir: string;
   private readonly defaultLimitMs: number | undefined;
   private readonly onFinished: TaskRegistryOptions['onFinished'];
+  private readonly reaper: Reaper | undefined;
+  private readonly maxLogBytes: number;
+  private logCheck: NodeJS.Timeout | undefined;
 
   constructor(options: TaskRegistryOptions) {
     this.logDir = options.logDir;
     this.defaultLimitMs = options.defaultLimitMs;
     this.onFinished = options.onFinished;
+    this.reaper = options.reaper;
+    this.maxLogBytes = options.maxLogBytes ?? MAX_LOG_BYTES;
+  }
+
+  /**
+   * Keeps a detached process group from outliving Cairn's process, until the returned function
+   * is called once it has exited. For foreground commands too, which are detached so a timeout
+   * can end everything they started.
+   */
+  guard(pid: number | undefined): () => void {
+    this.reaper?.add(pid);
+    return () => this.reaper?.remove(pid);
+  }
+
+  /**
+   * Logs are written in append mode, so emptying one leaves the command writing at its new end.
+   * Checked on a timer while anything runs, since the command writes to the file directly.
+   */
+  private watchLogs(): void {
+    if (this.logCheck) return;
+    this.logCheck = setInterval(() => {
+      const running = this.running();
+      if (running.length === 0) {
+        clearInterval(this.logCheck);
+        this.logCheck = undefined;
+        return;
+      }
+      for (const task of running) {
+        try {
+          if (statSync(task.logPath).size <= this.maxLogBytes) continue;
+          truncateSync(task.logPath, 0);
+          const size = this.maxLogBytes >= 1024 * 1024 ? `${Math.round(this.maxLogBytes / (1024 * 1024))} MB` : `${this.maxLogBytes} bytes`;
+          appendFileSync(task.logPath, `[${new Date().toISOString()}: this log passed ${size}, so Cairn emptied it. The command is still running; what it printed before this line is gone.]\n`);
+        } catch {
+          // The log was removed, as by cairn purge. There is nothing to bound.
+        }
+      }
+    }, LOG_CHECK_MS);
+    this.logCheck.unref();
   }
 
   list(): BackgroundTask[] {
@@ -89,6 +139,8 @@ export class TaskRegistry {
   private register(child: ChildProcess, command: string, logPath: string, id: string, description: string | undefined, limitMs: number | undefined): BackgroundTask {
     const task: BackgroundTask = { id, pid: child.pid!, command, logPath, startedAt: Date.now(), status: 'running', ...(description ? { description } : {}) };
     this.tasks.set(id, task);
+    const release = this.guard(child.pid);
+    this.watchLogs();
     if (limitMs !== undefined) {
       const timer = setTimeout(() => this.finishByLimit(task), limitMs);
       timer.unref();
@@ -96,6 +148,7 @@ export class TaskRegistry {
     }
     child.once('exit', (code) => {
       clearTimeout(this.timers.get(id));
+      release();
       if (task.status === 'running') {
         task.status = 'exited';
         task.exitCode = code;
@@ -170,6 +223,7 @@ export class TaskRegistry {
     };
     this.tasks.set(id, task);
     this.stoppers.set(id, options.stop);
+    this.watchLogs();
     return task;
   }
 
@@ -204,23 +258,24 @@ export class TaskRegistry {
 
   /** Resolves when no command is left running, or the signal fires. */
   async waitForAll(signal?: AbortSignal): Promise<void> {
-    // The commands are unref'd, so nothing else would keep the process alive to see them exit.
-    const keepAlive = setInterval(() => {}, 1_000);
-    try {
-      while (this.running().length > 0 && !signal?.aborted) {
-        await new Promise<void>((resolve) => {
-          const wake = (): void => {
-            this.settled.delete(wake);
-            signal?.removeEventListener('abort', wake);
-            resolve();
-          };
-          this.settled.add(wake);
-          signal?.addEventListener('abort', wake, { once: true });
-        });
-      }
-    } finally {
-      clearInterval(keepAlive);
-    }
+    while (this.running().length > 0 && !signal?.aborted) await this.waitForChange(signal);
+  }
+
+  /** Resolves when the next task ends, however it ends, or the signal fires. */
+  waitForChange(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      // The commands are unref'd, so nothing else would keep the process alive to see them exit.
+      const keepAlive = setInterval(() => {}, 1_000);
+      const wake = (): void => {
+        clearInterval(keepAlive);
+        this.settled.delete(wake);
+        signal?.removeEventListener('abort', wake);
+        resolve();
+      };
+      this.settled.add(wake);
+      signal?.addEventListener('abort', wake, { once: true });
+    });
   }
 }
 
