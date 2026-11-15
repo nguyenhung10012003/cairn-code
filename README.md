@@ -1,5 +1,7 @@
 # Cairn
 
+[![M8ven Score](https://m8ven.ai/badge/mcp/nguyenhung10012003-cairn-code-1glm1a?v=7a493d130ee79c73b652b847ac6bbc2c)](https://m8ven.ai/mcp/nguyenhung10012003-cairn-code-1glm1a?s=readme)
+
 [![CI](https://github.com/nguyenhung10012003/cairn-code/actions/workflows/ci.yml/badge.svg)](https://github.com/nguyenhung10012003/cairn-code/actions/workflows/ci.yml)
 
 A coding agent for the terminal. It reads and edits code, runs commands and works through tasks with you, and asks before doing anything you have not allowed.
@@ -163,24 +165,31 @@ Without `--type`, `add` asks for the type, then for the base URL, the key and th
   "provider": "deepseek",
   "model": "deepseek-chat",
   "providers": {
-    "deepseek": { "type": "openai-chat", "baseUrl": "https://api.deepseek.com/v1", "model": "deepseek-chat" },
-    "anthropic": { "baseUrl": "https://gateway.example.com", "apiKeyEnv": "MY_GATEWAY_KEY" }
+    "deepseek": {
+      "type": "openai-chat",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat"
+    },
+    "anthropic": {
+      "baseUrl": "https://gateway.example.com",
+      "apiKeyEnv": "MY_GATEWAY_KEY"
+    }
   }
 }
 ```
 
 `model` at the top level goes with `provider` at the top level. With `--provider` set to another provider, that provider's own `model`, or its built-in default, is used instead.
 
-| Option | Meaning |
-| --- | --- |
-| `type` | The API a provider added under its own name speaks: `anthropic`, `openai`, `openai-chat` or `ollama`. The built-in names always speak their own |
-| `model` | The model to use with this provider |
-| `baseUrl` | Where its API is. For `anthropic`, `ANTHROPIC_BASE_URL` does the same |
-| `apiKeyEnv` | Read the key from this variable |
-| `fullApiFeatures` | `anthropic`: use the API extras even through a `baseUrl`. Set this only if the upstream really is the API |
-| `maxRetries` | Retries on 429, 5xx, connection errors and a stream that fails partway, which starts the response over. Each wait doubles from 0.5s, or is what the server asks for, and is never more than 5 minutes. Default 10 |
-| `contextWindow` | Tokens of context. Ollama loads the model with exactly this many; for other providers it sets when to compact for a model they do not know |
-| `maxOutputTokens` | `openai-chat`: the most tokens to ask for in a response. Unset, the server decides |
+| Option            | Meaning                                                                                                                                                                                                           |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`            | The API a provider added under its own name speaks: `anthropic`, `openai`, `openai-chat` or `ollama`. The built-in names always speak their own                                                                   |
+| `model`           | The model to use with this provider                                                                                                                                                                               |
+| `baseUrl`         | Where its API is. For `anthropic`, `ANTHROPIC_BASE_URL` does the same                                                                                                                                             |
+| `apiKeyEnv`       | Read the key from this variable                                                                                                                                                                                   |
+| `fullApiFeatures` | `anthropic`: use the API extras even through a `baseUrl`. Set this only if the upstream really is the API                                                                                                         |
+| `maxRetries`      | Retries on 429, 5xx, connection errors and a stream that fails partway, which starts the response over. Each wait doubles from 0.5s, or is what the server asks for, and is never more than 5 minutes. Default 10 |
+| `contextWindow`   | Tokens of context. Ollama loads the model with exactly this many; for other providers it sets when to compact for a model they do not know                                                                        |
+| `maxOutputTokens` | `openai-chat`: the most tokens to ask for in a response. Unset, the server decides                                                                                                                                |
 
 ### Chat Completions (`openai-chat`)
 
@@ -233,13 +242,13 @@ The Agent tool's `model` parameter takes `opus`, `sonnet`, `haiku` or `fable`. E
 
 ### API features in use (Anthropic)
 
-| Feature | Notes |
-| --- | --- |
-| Prompt caching | Lowers the cost of rereading the start of the conversation |
-| Web search | Runs on the server, at most 5 searches per request, billed at $10 per 1,000 searches |
-| Refusal fallback | When the model declines because of a safety filter, the API switches to another model and Cairn tells you. Available on Opus 5.5, Opus 5, Sonnet 5.5 and Fable 5.1 |
-| Thinking summaries | Shown dimmed above the input while they stream, then folded to one line, such as `✻ Thought for 12s` |
-| USD cost | `/cost` and `total_cost_usd` are estimates from list prices; the Console shows what you are actually billed |
+| Feature            | Notes                                                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Prompt caching     | Lowers the cost of rereading the start of the conversation                                                                                                         |
+| Web search         | Runs on the server, at most 5 searches per request, billed at $10 per 1,000 searches                                                                               |
+| Refusal fallback   | When the model declines because of a safety filter, the API switches to another model and Cairn tells you. Available on Opus 5.5, Opus 5, Sonnet 5.5 and Fable 5.1 |
+| Thinking summaries | Shown dimmed above the input while they stream, then folded to one line, such as `✻ Thought for 12s`                                                               |
+| USD cost           | `/cost` and `total_cost_usd` are estimates from list prices; the Console shows what you are actually billed                                                        |
 
 Through a custom `baseUrl`, Cairn sends only what any gateway should accept: web search, fallback, eager streaming and automatic caching are off unless `fullApiFeatures` is set.
 
@@ -261,22 +270,31 @@ cairn mcp get github        # env and header values are hidden
 cairn mcp remove github
 ```
 
-| Scope | Stored in | For |
-| --- | --- | --- |
+| Scope             | Stored in                             | For                                                                                            |
+| ----------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `local` (default) | `~/.cairn/workspaces/<hash>/mcp.json` | Only you, only this project. Outside the repository, so a token cannot be committed by mistake |
-| `project` | `.mcp.json` at the repository root | Shared with the team through git. Use `${VAR}` instead of writing tokens |
-| `user` | `~/.cairn/mcp.json` | Only you, every project |
+| `project`         | `.mcp.json` at the repository root    | Shared with the team through git. Use `${VAR}` instead of writing tokens                       |
+| `user`            | `~/.cairn/mcp.json`                   | Only you, every project                                                                        |
 
 Precedence: `--mcp-config`, then local, project, user. A single run can use `--mcp-config <file-or-json>`, and `--strict-mcp-config` to ignore every other configuration.
 
 ```json
 {
   "mcpServers": {
-    "fs": { "command": "npx", "args": ["-y", "my-server"], "env": { "KEY": "${MY_KEY}" }, "timeout": 60000 },
+    "fs": {
+      "command": "npx",
+      "args": ["-y", "my-server"],
+      "env": { "KEY": "${MY_KEY}" },
+      "timeout": 60000
+    },
     "api": {
       "url": "${API_URL:-https://api.example.com}/mcp",
       "headers": { "Authorization": "Bearer ${API_TOKEN}" },
-      "oauth": { "clientId": "...", "scopes": "read write", "callbackPort": 8080 }
+      "oauth": {
+        "clientId": "...",
+        "scopes": "read write",
+        "callbackPort": 8080
+      }
     },
     "off": { "command": "x", "disabled": true }
   }
@@ -313,29 +331,31 @@ description: Review uncommitted changes and point out risks
 argument-hint: [file]
 allowed-tools: Bash(git diff *) Read
 ---
+
 ## Current changes
+
 !`git diff HEAD`
 
 Review $ARGUMENTS. Reference file: ${CAIRN_SKILL_DIR}/checklist.md
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `name`, `description`, `when_to_use`, `argument-hint` | Command name and description |
-| `disable-model-invocation: true` | Only you can run it. Use this for anything with side effects, such as deploying |
-| `user-invocable: false` | Only the model can run it |
-| `allowed-tools`, `disallowed-tools` | Pre-approve or block tools, **only for the turn the skill runs in** |
-| `model`, `effort` | Change these for the rest of that turn |
-| `context: fork`, `agent` | Run in a subagent; only the report comes back |
-| `arguments` | Names for positional arguments, usable as `$name` |
-| `paths` | Glob patterns: the model learns of the skill only when working with matching files |
-| `hooks` | Hooks registered when the skill runs, kept for the rest of the session; `once: true` runs one only once |
+| Field                                                 | Meaning                                                                                                 |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `name`, `description`, `when_to_use`, `argument-hint` | Command name and description                                                                            |
+| `disable-model-invocation: true`                      | Only you can run it. Use this for anything with side effects, such as deploying                         |
+| `user-invocable: false`                               | Only the model can run it                                                                               |
+| `allowed-tools`, `disallowed-tools`                   | Pre-approve or block tools, **only for the turn the skill runs in**                                     |
+| `model`, `effort`                                     | Change these for the rest of that turn                                                                  |
+| `context: fork`, `agent`                              | Run in a subagent; only the report comes back                                                           |
+| `arguments`                                           | Names for positional arguments, usable as `$name`                                                       |
+| `paths`                                               | Glob patterns: the model learns of the skill only when working with matching files                      |
+| `hooks`                                               | Hooks registered when the skill runs, kept for the rest of the session; `once: true` runs one only once |
 
 **Sources:** the current directory and its parents up to the repository root, `~/.cairn/skills`, directories from `--add-dir` or `/add-dir` (a clashing name becomes `/dir:name`), subdirectories once the model reaches them (`/apps/web:deploy`), and plugins (`/plugin:name`). Skills added or removed during a session are reported to the model on its next turn; `/reload-skills` checks right away.
 
 **Substitutions:** `$ARGUMENTS`, `$0`, `$1`, `$ARGUMENTS[0]`, `$name`, `${CAIRN_SKILL_DIR}`, `${CAIRN_PROJECT_DIR}`, `${CAIRN_SESSION_ID}`, `${CAIRN_EFFORT}`. Write `\$1` for a literal dollar sign. If a skill has no place for arguments, Cairn appends `ARGUMENTS: ...`.
 
-**Injected commands** `` !`command` `` and ```` ```! ```` blocks run before the model sees the skill, without asking anyone. Each command must already be allowed, by a rule or by `allowed-tools`; otherwise the whole skill stops. Arguments are never scanned for injected commands.
+**Injected commands** `` !`command` `` and ` ```! ` blocks run before the model sees the skill, without asking anyone. Each command must already be allowed, by a rule or by `allowed-tools`; otherwise the whole skill stops. Arguments are never scanned for injected commands.
 
 **Permissions:** a skill that only adds text loads freely. A skill with injected commands, `allowed-tools`, `hooks` or `context: fork` asks first. Rules: `Skill(deploy)`, `Skill(deploy *)`, or deny `Skill` to turn skills off entirely.
 
@@ -374,8 +394,16 @@ Bash rules are only guardrails. The sandbox is the boundary, enforced by the ope
   "sandbox": {
     "enabled": true,
     "excludedCommands": ["docker *"],
-    "filesystem": { "allowWrite": ["~/.kube"], "denyRead": ["~/.ssh", "~/.aws"], "allowRead": [] },
-    "network": { "allowedDomains": ["github.com", "*.npmjs.org"], "deniedDomains": [], "allowLocalBinding": false }
+    "filesystem": {
+      "allowWrite": ["~/.kube"],
+      "denyRead": ["~/.ssh", "~/.aws"],
+      "allowRead": []
+    },
+    "network": {
+      "allowedDomains": ["github.com", "*.npmjs.org"],
+      "deniedDomains": [],
+      "allowLocalBinding": false
+    }
   }
 }
 ```
@@ -407,14 +435,14 @@ The model schedules prompts with **CronCreate**, in 5-field cron in local time, 
 
 **`/loop`** runs a prompt again and again while the session is open:
 
-| You type | What happens |
-| --- | --- |
-| `/loop 5m check the deploy` | A recurring job every 5 minutes, which also runs once now |
-| `/loop check the deploy every 2 hours` | The same, with the interval at the end |
-| `/loop check the deploy` | Self-paced: after each iteration the model picks when the next runs |
-| `/loop 15m` | The default prompt every 15 minutes |
-| `/loop` | The default prompt, self-paced |
-| `/loop stop` | Stops the self-paced loop and the jobs `/loop` scheduled |
+| You type                               | What happens                                                        |
+| -------------------------------------- | ------------------------------------------------------------------- |
+| `/loop 5m check the deploy`            | A recurring job every 5 minutes, which also runs once now           |
+| `/loop check the deploy every 2 hours` | The same, with the interval at the end                              |
+| `/loop check the deploy`               | Self-paced: after each iteration the model picks when the next runs |
+| `/loop 15m`                            | The default prompt every 15 minutes                                 |
+| `/loop`                                | The default prompt, self-paced                                      |
+| `/loop stop`                           | Stops the self-paced loop and the jobs `/loop` scheduled            |
 
 The prompt can be a skill, as in `/loop 20m /review-pr 1234`, and so can a job's prompt from CronCreate: each run asks the model to run that skill with the Skill tool, under the Skill permission rules. A skill with `disable-model-invocation: true`, a built-in command such as `/clear`, and an MCP prompt reach the model as plain text instead. Intervals take `s`, `m`, `h` and `d`. Seconds round up to whole minutes, and an interval a schedule cannot repeat on evenly, such as `7m` or `90m`, is rounded to the nearest one that it can, which `/loop` names. The schedule counts from the moment you start it, so after the run that starts the loop, the next comes a whole interval later; `7d` repeats on the same weekday. A scheduled loop is a cron job like any other: it is saved, comes back on resume and ends after 7 days.
 
@@ -473,7 +501,12 @@ With no `CAIRN_SCRIPT`, it uses the built-in rules in `src/providers/mock-demo.j
     {
       "regex": "^deploy (\\w+)$",
       "steps": [
-        { "text": "Deploying {{1}}.", "toolCalls": [{ "name": "Bash", "input": { "command": "echo deployed {{1}}" } }] },
+        {
+          "text": "Deploying {{1}}.",
+          "toolCalls": [
+            { "name": "Bash", "input": { "command": "echo deployed {{1}}" } }
+          ]
+        },
         { "text": "Done: {{result}}" }
       ]
     },
@@ -511,7 +544,10 @@ Settings are read in this order, each overriding the one before: `~/.cairn/setti
   },
   "hooks": {
     "PreToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": ".cairn/hooks/check.sh" }] }
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": ".cairn/hooks/check.sh" }]
+      }
     ]
   }
 }
@@ -519,12 +555,12 @@ Settings are read in this order, each overriding the one before: `~/.cairn/setti
 
 **Permission modes:**
 
-| Mode | Behavior |
-| --- | --- |
-| `default` | Asks before changing files or running commands that are not read-only |
-| `acceptEdits` | Approves file changes and `mkdir`, `touch`, `mv`, `cp` inside the working directories |
-| `plan` | Read-only; leave it by approving a plan |
-| `dontAsk` | Refuses everything that would have asked |
+| Mode                | Behavior                                                                                                          |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `default`           | Asks before changing files or running commands that are not read-only                                             |
+| `acceptEdits`       | Approves file changes and `mkdir`, `touch`, `mv`, `cp` inside the working directories                             |
+| `plan`              | Read-only; leave it by approving a plan                                                                           |
+| `dontAsk`           | Refuses everything that would have asked                                                                          |
 | `bypassPermissions` | Never asks, except for ask rules and commands that delete important paths. Use it only in an isolated environment |
 
 Bash rules guard against mistakes; they are not a security boundary. For a real boundary, see Sandbox.
@@ -540,6 +576,7 @@ Bash rules guard against mistakes; they are not a security boundary. For a real 
 paths:
   - "src/api/**/*.{ts,tsx}"
 ---
+
 Every endpoint must validate its input.
 ```
 
