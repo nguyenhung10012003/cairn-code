@@ -1,6 +1,6 @@
 {
   "name": "karst-code",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "A coding agent for the terminal: tools, permissions, sandbox, MCP, skills and plugins, on Anthropic, OpenAI, Ollama or any Chat Completions API.",
   "repository": {
     "type": "git",
