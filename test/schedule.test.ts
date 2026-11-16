@@ -1,4 +1,4 @@
-/** Scheduled prompts kept in the workspace folder, /loop, and ScheduleWakeup. */
+/** Scheduled prompts kept in the workspace folder, /loop, ScheduleWakeup, CronList and CronDelete. */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,7 @@ import type { Runtime } from '../src/core/runtime.ts';
 import { ScriptedProvider } from '../src/providers/scripted.ts';
 import type { ScriptedTurn } from '../src/providers/scripted.ts';
 import { WorkspaceJobStore } from '../src/session/scheduled.ts';
-import { CronScheduler, nextMatch, parseCron, scheduleWakeupTool } from '../src/tools/cron.ts';
+import { cronDeleteTool, cronListTool, CronScheduler, nextMatch, parseCron, scheduleWakeupTool } from '../src/tools/cron.ts';
 import type { Prompter } from '../src/tools/types.ts';
 
 const prompter: Prompter = { permission: async () => ({ behavior: 'allow' }), questions: async () => null, approvePlan: async () => true };
@@ -436,6 +436,41 @@ describe('a self-paced loop', () => {
     assert.match((await call({ delaySeconds: 5, reason: 'x' })).content as string, /so it is 60/);
     assert.match((await call({ reason: 'x' })).content as string, /Give delaySeconds/);
     assert.equal(runtime.cron!.list().filter((job) => job.origin === 'wakeup').length, 1, 'a new wakeup replaces the one before');
+    await runtime.shutdown();
+  });
+});
+
+describe('CronList and CronDelete', () => {
+  it('list the jobs this session runs, and cancel one by its id', async () => {
+    const runtime = await createRuntime({ cwd: project, provider: new ScriptedProvider([]), persist: false, prompter });
+    const ctx = { ...runtime.context, signal: new AbortController().signal };
+    assert.deepEqual(await cronListTool.execute({}, ctx), { content: 'No scheduled jobs.', display: '0 jobs' });
+
+    const kept = runtime.cron!.create('7 9 * * *', 'morning check', true);
+    const cancelled = runtime.cron!.create(pinned(comingMinute()), 'remind me\nabout the deploy', false);
+    const listed = await cronListTool.execute({}, ctx);
+    assert.equal(listed.display, '2 jobs');
+    assert.match(listed.content, new RegExp(`^${kept.id}  7 9 \\* \\* \\*  \\(recurring, expires .+\\)  next run: .+\\n  prompt: morning check$`, 'm'));
+    assert.match(listed.content, new RegExp(`^${cancelled.id}  .+  \\(one-shot\\)  next run: .+\\n  prompt: remind me about the deploy$`, 'm'));
+
+    assert.deepEqual(await cronDeleteTool.execute({ id: cancelled.id }, ctx), { content: `Cancelled job ${cancelled.id}.`, display: `cancelled ${cancelled.id}` });
+    assert.deepEqual(runtime.cron!.list().map((job) => job.id), [kept.id]);
+    assert.deepEqual(await cronDeleteTool.execute({ id: cancelled.id }, ctx), { content: `No scheduled job ${cancelled.id}.`, isError: true });
+    await runtime.shutdown();
+  });
+
+  it('take a durable job out of the saved jobs, so later sessions do not run it', async () => {
+    const runtime = await createRuntime({ cwd: project, provider: new ScriptedProvider([]), prompter });
+    const ctx = { ...runtime.context, signal: new AbortController().signal };
+    const job = runtime.cron!.create('7 9 * * *', 'project check', true, { durable: true });
+    assert.deepEqual(new WorkspaceJobStore(project).load().map((saved) => saved.id), [job.id]);
+    assert.match((await cronListTool.execute({}, ctx)).content, new RegExp(`^${job.id}  .+, durable\\)`));
+
+    assert.equal((await cronDeleteTool.execute({ id: job.id }, ctx)).content, `Cancelled job ${job.id}.`);
+    assert.deepEqual(new WorkspaceJobStore(project).load(), []);
+    const later = new CronScheduler(() => {}, { session: () => 'a-later-session', store: new WorkspaceJobStore(project) });
+    assert.deepEqual(later.restore('a-later-session'), []);
+    later.stopAll();
     await runtime.shutdown();
   });
 });

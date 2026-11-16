@@ -18,7 +18,7 @@ import { notebookEditTool } from '../src/tools/notebook.ts';
 import { Reaper } from '../src/tools/reaper.ts';
 import { TaskRegistry, taskStopTool } from '../src/tools/tasks.ts';
 import { FileTracker } from '../src/tools/types.ts';
-import type { Prompter, ToolContext } from '../src/tools/types.ts';
+import type { PermissionAnswer, Prompter, ToolContext } from '../src/tools/types.ts';
 
 const CLI = resolve(import.meta.dirname, '../src/cli.ts');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEBgIApD5fRAAAAABJRU5ErkJggg==', 'base64');
@@ -597,6 +597,43 @@ describe('background agents', () => {
     assert.match(heard, /X is fine/);
     await runtime.shutdown();
   });
+
+  it('are listed by ListAgents, and SendMessage reaches one by its description', async () => {
+    const dir = tempDir();
+    process.env.KARST_HOME = tempDir('karst-taskhome-');
+    const provider = new ScriptedProvider({
+      rules: [
+        {
+          regex: '^go$',
+          steps: [
+            { toolCalls: [{ name: 'ListAgents', input: {} }] },
+            { toolCalls: [{ name: 'Agent', input: { description: 'worker', prompt: 'do the work' } }] },
+            { toolCalls: [{ name: 'ListAgents', input: {} }] },
+            { toolCalls: [{ name: 'SendMessage', input: { to: 'worker', summary: 'one more check', message: 'also check X' } }] },
+            { toolCalls: [{ name: 'SendMessage', input: { to: 'nobody', message: 'hello' } }] },
+            { toolCalls: [{ name: 'SendMessage', input: { to: 'main', message: 'hello' } }] },
+            { text: 'ok' },
+          ],
+        },
+        { match: 'do the work', steps: [{ text: 'work report', delayMs: 1_000 }] },
+        { match: 'also check X', steps: [{ text: 'X is fine' }] },
+      ],
+    });
+    const runtime = await createRuntime({ cwd: dir, provider, persist: false, mode: 'bypassPermissions', prompter, backgroundAgents: true });
+    for await (const _event of runtime.agent.run('go', new AbortController().signal)) {
+      // Run it to the end.
+    }
+    const [none, _launched, listed, delivered, unknown, toSelf] = results(provider);
+    assert.equal(none, 'No agents have been started in this session.');
+    const id = runtime.backgroundAgents.list()[0]!.id;
+    assert.match(listed!, new RegExp(`^- ${id}  worker  \\(.+, running\\)$`));
+    assert.match(delivered!, new RegExp(`^Delivered to ${id}\\.`));
+    assert.equal(unknown, `No agent named "nobody". Known agents: ${id}.`);
+    assert.equal(toSelf, 'You are the main conversation. Write to the user directly instead.');
+
+    await until(() => asked(provider, /<agent-message from=\\"main\\">\\nalso check X/) && runtime.backgroundAgents.list()[0]!.status === 'completed');
+    await runtime.shutdown();
+  });
 });
 
 describe('monitors', () => {
@@ -633,6 +670,42 @@ describe('monitors', () => {
     assert.equal(runtime.wakes.take().notes, true);
     const id = /task (\w+)/.exec(started.content as string)![1]!;
     runtime.context.tasks.stop(id);
+    await runtime.shutdown();
+  });
+
+  it('asks before Monitor runs a command, as Bash does, and runs nothing when refused', async () => {
+    const dir = tempDir();
+    process.env.KARST_HOME = tempDir('karst-taskhome-');
+    const prompted: string[] = [];
+    let answer: PermissionAnswer = { behavior: 'deny' };
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ name: 'Monitor', input: { description: 'refused', timeout_ms: 10_000, command: 'touch refused; echo no' } }] },
+      { text: 'ok' },
+      { toolCalls: [{ name: 'Monitor', input: { description: 'allowed', timeout_ms: 10_000, command: 'touch allowed; echo yes' } }] },
+      { text: 'ok' },
+    ]);
+    const asking: Prompter = {
+      ...prompter,
+      permission: async (prompt) => {
+        prompted.push(prompt.toolName);
+        return answer;
+      },
+    };
+    const runtime = await createRuntime({ cwd: dir, provider, persist: false, prompter: asking });
+    for await (const _event of runtime.agent.run('watch it', new AbortController().signal)) {
+      // Run it to the end.
+    }
+    answer = { behavior: 'allow' };
+    for await (const _event of runtime.agent.run('watch it again', new AbortController().signal)) {
+      // Run it to the end.
+    }
+
+    assert.deepEqual(prompted, ['Monitor', 'Monitor']);
+    const [refused, started] = provider.requests.flatMap((request) => request.messages.at(-1)!.content.flatMap((block) => (block.type === 'tool_result' ? [block] : [])));
+    assert.equal(refused!.is_error, true);
+    assert.match(started!.content, /task \w+/);
+    await until(() => existsSync(join(dir, 'allowed')));
+    assert.equal(existsSync(join(dir, 'refused')), false);
     await runtime.shutdown();
   });
 });
