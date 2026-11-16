@@ -292,7 +292,7 @@ export class HookRunner {
     if (handlers.length === 0) return result;
 
     const payload = JSON.stringify({ ...common, hook_event_name: event, ...extra });
-    const env = { CAIRN_PROJECT_DIR: this.projectDir };
+    const env = { KARST_PROJECT_DIR: this.projectDir };
     const waited = handlers.filter((handler) => {
       if (!handler.async) return true;
       // Nothing can be decided from an async hook, so its answer is not awaited or read.

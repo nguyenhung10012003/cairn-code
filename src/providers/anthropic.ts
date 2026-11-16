@@ -39,7 +39,7 @@ function withoutKeys(block: ApiBlock, keys: string[]): Record<string, unknown> {
 }
 
 /**
- * Replayed blocks must match what the API sent. Fields Cairn has no use for, such as citations
+ * Replayed blocks must match what the API sent. Fields Karst has no use for, such as citations
  * on text, are kept in `extra` so they go back unchanged.
  */
 export function toNeutralContent(apiBlocks: readonly ApiBlock[]): ContentBlock[] {
@@ -389,7 +389,7 @@ export class AnthropicProvider implements ModelProvider {
   configurationWarning(): string | undefined {
     const names = this.credentialHint === 'ANTHROPIC_API_KEY' ? ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] : [this.credentialHint];
     if (this.hasStoredKey || names.some((name) => process.env[name])) return undefined;
-    return `${this.credentialHint} is not set, so requests will fail unless an \`ant auth login\` profile exists. Save a key with: cairn provider key ${this.name}`;
+    return `${this.credentialHint} is not set, so requests will fail unless an \`ant auth login\` profile exists. Save a key with: karst provider key ${this.name}`;
   }
 
   async listModels(): Promise<string[]> {

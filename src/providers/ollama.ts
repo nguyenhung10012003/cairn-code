@@ -2,7 +2,7 @@
  * Ollama through its native chat API (`/api/chat`), with plain fetch. The native API is used
  * rather than Ollama's OpenAI-compatible one because only the native API takes `num_ctx`:
  * through the compatible endpoint a model loads with Ollama's default context (often 4,096
- * tokens) and silently drops the start of a long prompt, which would cut off Cairn's system
+ * tokens) and silently drops the start of a long prompt, which would cut off Karst's system
  * prompt and tool definitions.
  */
 import { randomBytes } from 'node:crypto';
@@ -17,7 +17,7 @@ import { DEFAULT_MAX_RETRIES, withRetries } from './retry.ts';
 const PROVIDER_ID = 'ollama';
 const DEFAULT_MODEL = 'qwen3-coder:30b';
 const DEFAULT_HOST = 'http://localhost:11434';
-/** Cairn's system prompt and tool definitions alone take a large part of a small window. */
+/** Karst's system prompt and tool definitions alone take a large part of a small window. */
 const DEFAULT_CONTEXT_WINDOW = 65_536;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
 
@@ -164,7 +164,7 @@ export class OllamaProvider implements ModelProvider {
     return (body.models ?? []).flatMap((model) => (typeof model.name === 'string' ? [model.name] : [])).sort();
   }
 
-  /** A local model costs nothing per token. A remote host may charge, at a rate Cairn does not know. */
+  /** A local model costs nothing per token. A remote host may charge, at a rate Karst does not know. */
   private isLocal(): boolean {
     try {
       return LOCAL_HOSTS.has(new URL(this.host).hostname);

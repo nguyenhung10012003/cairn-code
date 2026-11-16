@@ -4,18 +4,18 @@ import type { Tool } from './types.ts';
 
 export const enterWorktreeTool: Tool = {
   name: 'EnterWorktree',
-  description: `Use this tool ONLY when explicitly instructed to work in a worktree — either by the user directly, or by project instructions (CAIRN.md / memory). This tool creates an isolated git worktree and switches the current session into it.
+  description: `Use this tool ONLY when explicitly instructed to work in a worktree — either by the user directly, or by project instructions (KARST.md / memory). This tool creates an isolated git worktree and switches the current session into it.
 
 ### When to Use
 
 - The user explicitly says "worktree" (e.g., "start a worktree", "work in a worktree", "create a worktree", "use a worktree")
-- CAIRN.md or memory instructions direct you to work in a worktree for the current task
+- KARST.md or memory instructions direct you to work in a worktree for the current task
 
 ### When NOT to Use
 
 - The user asks to create a branch, switch branches, or work on a different branch — use git commands instead
 - The user asks to fix a bug or work on a feature — use normal git workflow unless worktrees are explicitly requested by the user or project instructions
-- Never use this tool unless "worktree" is explicitly mentioned by the user or in CAIRN.md / memory instructions
+- Never use this tool unless "worktree" is explicitly mentioned by the user or in KARST.md / memory instructions
 
 ### Requirements
 

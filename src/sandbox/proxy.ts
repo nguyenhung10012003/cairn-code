@@ -58,7 +58,7 @@ async function reachesOnlyLocal(host: string): Promise<boolean> {
 
 /** Closes fully. A half-closed socket here would keep the server, and so the session, from exiting. */
 function refuse(client: Socket, status: string, why: string): void {
-  client.end(`HTTP/1.1 ${status}\r\nContent-Type: text/plain\r\nConnection: close\r\nX-Cairn-Sandbox: blocked\r\n\r\n${why}\n`, () => client.destroy());
+  client.end(`HTTP/1.1 ${status}\r\nContent-Type: text/plain\r\nConnection: close\r\nX-Karst-Sandbox: blocked\r\n\r\n${why}\n`, () => client.destroy());
 }
 
 function splitTarget(authority: string, defaultPort: number): { host: string; port: number } | null {

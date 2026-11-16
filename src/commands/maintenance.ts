@@ -1,9 +1,10 @@
-/** `cairn doctor` and `cairn purge`: commands that look after the installation, with no session. */
+/** `karst doctor` and `karst purge`: commands that look after the installation, with no session. */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { backgroundLogDir, credentialsPath, fileHistoryDir, sessionsDir, trustFilePath, VERSION, workspaceDir } from '../config/paths.ts';
 import { legacyMemoryDir } from '../config/workspace.ts';
+import { legacyFindings } from './migrate.ts';
 import { DEFAULT_PROVIDER, keySource, PROVIDER_TYPES, providerTypeName } from '../providers/index.ts';
 import { loadSettings } from '../config/settings.ts';
 import { isTrusted } from '../config/trust.ts';
@@ -70,6 +71,7 @@ export function runDoctor(cwd: string): number {
   const gitVersion = commandVersion('git');
   check('git', gitVersion ?? 'not found', gitVersion !== null);
   check('pdftoppm', commandVersion('pdftoppm') ?? 'not found, so reading PDF page ranges will not work');
+  for (const finding of legacyFindings(cwd)) check('From Cairn', finding);
 
   process.stdout.write(`${lines.join('\n')}\n`);
   return problems === 0 ? 0 : 1;
@@ -91,7 +93,7 @@ function pathsToPurge(project: string): string[] {
 }
 
 const PURGE_USAGE =
-  "Usage: cairn purge [path] [--dry-run] [--yes]\nDeletes this machine's data for a project: its workspace folder (settings, saved approvals, MCP servers, memory and scheduled jobs), transcripts, file history and logs, and its trust entry. The project's own files, .cairn/ included, are not touched.\n";
+  "Usage: karst purge [path] [--dry-run] [--yes]\nDeletes this machine's data for a project: its workspace folder (settings, saved approvals, MCP servers, memory and scheduled jobs), transcripts, file history and logs, and its trust entry. The project's own files, .karst/ included, are not touched.\n";
 
 /** Deletes data that cannot be recovered, so it says exactly what first and needs --yes to act. */
 export function runPurge(args: string[], cwd: string): number {

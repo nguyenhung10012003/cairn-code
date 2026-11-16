@@ -5,7 +5,7 @@
  *   The source shebang runs Bun, so it is swapped for a Node one.
  * - package.json: the fields a user's install needs, taken from the repository's package.json,
  *   without its scripts or development dependencies.
- * - README.md: README.npm.md, written for people installing Cairn. The repository's README.md is
+ * - README.md: README.npm.md, written for people installing Karst. The repository's README.md is
  *   for working on it.
  *
  * The repository's own package.json is private, so publishing has to go through this directory.
@@ -54,7 +54,7 @@ chmodSync(cli, 0o755);
 
 const manifest: Record<string, unknown> = {};
 for (const field of MANIFEST_FIELDS) if (pkg[field] !== undefined) manifest[field] = pkg[field];
-manifest.bin = { cairn: 'cli.js' };
+manifest.bin = { karst: 'cli.js' };
 writeFileSync(join(OUT_DIR, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 
 copyFileSync(README, join(OUT_DIR, 'README.md'));

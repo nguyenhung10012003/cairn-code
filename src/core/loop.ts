@@ -29,7 +29,7 @@ export const DEFAULT_LOOP_PROMPT = `Look after this project between turns. Go th
 
 Never merge, force-push, or delete branches or files. End with a short note on what you did or found.`;
 
-/** The default prompt: `.cairn/loop.md` in a trusted project, then `~/.cairn/loop.md`, then the built-in one. Read again for each run. */
+/** The default prompt: `.karst/loop.md` in a trusted project, then `~/.karst/loop.md`, then the built-in one. Read again for each run. */
 export function defaultLoopPrompt(projectDir: string, trusted: boolean): { text: string; source: string } {
   const candidates = [...(trusted ? [join(projectDir, PROJECT_DIR, LOOP_FILE)] : []), join(appHome(), LOOP_FILE)];
   for (const path of candidates) {

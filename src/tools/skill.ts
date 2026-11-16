@@ -16,7 +16,7 @@ export class SkillError extends Error {
 }
 
 export function activationOf(skill: Skill): SkillActivation {
-  const expand = (rule: string): string => rule.replaceAll('${CAIRN_SKILL_DIR}', skill.dir);
+  const expand = (rule: string): string => rule.replaceAll('${KARST_SKILL_DIR}', skill.dir);
   return {
     allowedTools: skill.allowedTools.map(expand),
     disallowedTools: skill.disallowedTools.map(expand),

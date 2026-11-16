@@ -3,19 +3,19 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 /** Rename the product by changing these constants. */
-export const APP_NAME = 'cairn';
-export const APP_DISPLAY_NAME = 'Cairn';
-export const PROJECT_DIR = '.cairn';
-export const INSTRUCTION_FILE = 'CAIRN.md';
-export const LOCAL_INSTRUCTION_FILE = 'CAIRN.local.md';
+export const APP_NAME = 'karst';
+export const APP_DISPLAY_NAME = 'Karst';
+export const PROJECT_DIR = '.karst';
+export const INSTRUCTION_FILE = 'KARST.md';
+export const LOCAL_INSTRUCTION_FILE = 'KARST.local.md';
 /** Checked in order when a directory has no INSTRUCTION_FILE, so existing repos work unchanged. */
 export const FALLBACK_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'];
 export const VERSION = '0.1.5';
-/** The package on npm, which update checks ask about and `cairn update` installs. */
-export const NPM_PACKAGE = 'cairn-code';
+/** The package on npm, which update checks ask about and `karst update` installs. */
+export const NPM_PACKAGE = 'karst-code';
 
 export function appHome(): string {
-  return process.env.CAIRN_HOME ?? join(homedir(), PROJECT_DIR);
+  return process.env.KARST_HOME ?? join(homedir(), PROJECT_DIR);
 }
 
 export function userSettingsPath(): string {
@@ -25,7 +25,7 @@ export function userSettingsPath(): string {
 /**
  * The folder this machine keeps for one project, outside the repository, named by a hash of the
  * project's path. It holds the project's settings and saved approvals, its local MCP servers, its
- * memory and its saved scheduled jobs. The repository's own `.cairn/` folder is for the user to create, and overrides it.
+ * memory and its saved scheduled jobs. The repository's own `.karst/` folder is for the user to create, and overrides it.
  */
 export function workspaceDir(projectDir: string): string {
   return join(appHome(), 'workspaces', createHash('sha256').update(projectDir).digest('hex').slice(0, 16));
@@ -57,7 +57,7 @@ export function projectSettingsPath(cwd: string): string {
   return join(cwd, PROJECT_DIR, 'settings.json');
 }
 
-/** A file the user may create in the repository's `.cairn/`, kept out of git. */
+/** A file the user may create in the repository's `.karst/`, kept out of git. */
 export function projectLocalSettingsPath(cwd: string): string {
   return join(cwd, PROJECT_DIR, 'settings.local.json');
 }

@@ -175,7 +175,7 @@ export async function runPrint(runtime: Runtime, prompt: string, options: PrintO
    * each ends, as in an interactive session, and the result is its last answer.
    */
   const runTurn = async (input: string, follow: boolean): Promise<boolean> => {
-    // `cairn -p "/review src/a.ts"` runs the skill. Built-in commands only make sense interactively.
+    // `karst -p "/review src/a.ts"` runs the skill. Built-in commands only make sense interactively.
     let text = input;
     let activation: SkillActivation | undefined;
     const slash = input.trimStart().startsWith('/') ? parseSlash(input) : null;

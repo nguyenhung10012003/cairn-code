@@ -1,4 +1,4 @@
-/** `cairn usage` and `/usage <report>`: saved tokens and estimated cost, per day, project or session. */
+/** `karst usage` and `/usage <report>`: saved tokens and estimated cost, per day, project or session. */
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';

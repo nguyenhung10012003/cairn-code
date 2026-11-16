@@ -1,11 +1,11 @@
-# Cairn
+# Karst
 
-A coding agent for the terminal. Cairn reads and edits your code, runs commands and works through tasks with you, and asks before doing anything you have not allowed. It works with Anthropic, OpenAI, Ollama, or any server that speaks the Chat Completions API.
+A coding agent for the terminal. Karst reads and edits your code, runs commands and works through tasks with you, and asks before doing anything you have not allowed. It works with Anthropic, OpenAI, Ollama, or any server that speaks the Chat Completions API.
 
 ```sh
-npm install -g cairn-code
+npm install -g karst-code
 export ANTHROPIC_API_KEY=...
-cairn
+karst
 ```
 
 ## Features
@@ -23,29 +23,43 @@ cairn
 Requires [Node.js](https://nodejs.org) 22 or later.
 
 ```sh
-npm install -g cairn-code     # installs the `cairn` command
-npx cairn-code                # or try it without installing
+npm install -g karst-code     # installs the `karst` command
+npx karst-code                # or try it without installing
 ```
 
-**In a repository you do not trust, run the installed `cairn`, not `npx cairn-code`.** npx prefers a copy of the package from the project's own `node_modules`, so the repository could supply its own.
+**In a repository you do not trust, run the installed `karst`, not `npx karst-code`.** npx prefers a copy of the package from the project's own `node_modules`, so the repository could supply its own.
+
+## Moving from Cairn
+
+Karst was called Cairn, published as `cairn-code`, until 0.2.0. It was renamed because Cairn Code (github.com/cairn/cairn), a different terminal coding agent, uses the same `cairn` command, `~/.cairn` folder and `CAIRN.md` file.
+
+```sh
+npm uninstall -g cairn-code
+npm install -g karst-code
+karst migrate --dry-run   # lists what would move from ~/.cairn to ~/.karst
+karst migrate
+```
+
+`karst migrate` moves settings, saved keys, trust, sessions, memory, plans, skills, agents, plugins and MCP sign-ins, and `~/.cairn/CAIRN.md` becomes `~/.karst/KARST.md`. It replaces nothing already in `~/.karst`, and leaves in `~/.cairn` anything Cairn did not write. Karst reads nothing from Cairn's places, so in your projects rename `CAIRN.md` to `KARST.md`, `CAIRN.local.md` to `KARST.local.md`, `.cairn/` to `.karst/` and a plugin's `.cairn-plugin/` to `.karst-plugin/`, and in hooks and settings use `KARST_PROJECT_DIR`, `KARST_PLUGIN_ROOT` and the other `KARST_*` variables. `karst doctor` points out what it finds.
 
 ## Quick start
 
 ```sh
 cd your-project
-cairn                                # interactive session
-cairn -p "explain this repo"         # answer once and exit
-cat log.txt | cairn -p "find bugs"   # also reads standard input
-cairn -c                             # continue the latest session in this directory
-cairn -r <id or name>                # resume an earlier session
-cairn usage                          # tokens and estimated cost per day; also: projects, sessions
-cairn doctor                         # check the installation
-cairn update                         # install the latest version
+karst                                # interactive session
+karst -p "explain this repo"         # answer once and exit
+cat log.txt | karst -p "find bugs"   # also reads standard input
+karst -c                             # continue the latest session in this directory
+karst -r <id or name>                # resume an earlier session
+karst usage                          # tokens and estimated cost per day; also: projects, sessions
+karst doctor                         # check the installation
+karst update                         # install the latest version
+karst migrate                        # move what Cairn, the earlier name, saved in ~/.cairn
 ```
 
-Each session checks npm for a newer version as it starts and says when there is one. `"updateCheck": false` in `~/.cairn/settings.json` turns that off, and `"autoUpdates": true` installs it in the background instead.
+Each session checks npm for a newer version as it starts and says when there is one. `"updateCheck": false` in `~/.karst/settings.json` turns that off, and `"autoUpdates": true` installs it in the background instead.
 
-Cairn uses an Anthropic API key from the [Console](https://platform.claude.com), or `ANTHROPIC_AUTH_TOKEN`. Instead of exporting it each time, you can save it once with `cairn provider key anthropic`. Cairn does not use a Claude Code login or subscription.
+Karst uses an Anthropic API key from the [Console](https://platform.claude.com), or `ANTHROPIC_AUTH_TOKEN`. Instead of exporting it each time, you can save it once with `karst provider key anthropic`. Karst does not use a Claude Code login or subscription.
 
 ## Choosing a provider and model
 
@@ -54,21 +68,21 @@ Cairn uses an Anthropic API key from the [Console](https://platform.claude.com),
 | `anthropic` | `ANTHROPIC_API_KEY`, or a saved key | `claude-opus-5-5` |
 | `openai` | `OPENAI_API_KEY`, or a saved key | `gpt-6-astra` |
 | `ollama` | Ollama on this machine, or `OLLAMA_HOST` | `qwen3-coder:30b` |
-| one you add | `cairn provider add` | the one you choose |
+| one you add | `karst provider add` | the one you choose |
 
 ```sh
-cairn --provider openai --model gpt-6.1-sol
-cairn provider add deepseek --type openai-chat --base-url https://api.deepseek.com/v1 --model deepseek-chat
-cairn provider list                  # every provider, its model, and where its key comes from
-cairn provider use deepseek          # the default for new sessions
-cairn provider remove deepseek
+karst --provider openai --model gpt-6.1-sol
+karst provider add deepseek --type openai-chat --base-url https://api.deepseek.com/v1 --model deepseek-chat
+karst provider list                  # every provider, its model, and where its key comes from
+karst provider use deepseek          # the default for new sessions
+karst provider remove deepseek
 ```
 
-`cairn provider add` asks for the key without showing it. Without `--type`, it also asks for the type, the base URL and the model. The types are `anthropic`, `openai`, `openai-chat` (Chat Completions) and `ollama`.
+`karst provider add` asks for the key without showing it. Without `--type`, it also asks for the type, the base URL and the model. The types are `anthropic`, `openai`, `openai-chat` (Chat Completions) and `ollama`.
 
 In a session, `/provider` opens a list of providers: type to narrow it, use `↑` `↓` and `Enter` to choose, or pick "Add a provider…". `/model` lists the current provider's models; for Ollama and Chat Completions servers, the list comes from the server. The conversation carries on with the new provider, and new sessions start with your last choice.
 
-**Keys** are saved in `~/.cairn/credentials.json`, which only you can read, and never in a settings file. A key in an environment variable takes precedence over a saved one. Each saved key is only sent to the address it was saved for: if a provider's address changes, for example through a repository's settings, Cairn warns and sends no key until you save one for the new address.
+**Keys** are saved in `~/.karst/credentials.json`, which only you can read, and never in a settings file. A key in an environment variable takes precedence over a saved one. Each saved key is only sent to the address it was saved for: if a provider's address changes, for example through a repository's settings, Karst warns and sends no key until you save one for the new address.
 
 ## Working in a session
 
@@ -77,7 +91,7 @@ In a session, `/provider` opens a list of providers: type to narrow it, use `↑
 - **Sending a message while the agent works** stops that work and continues from your new message. **`/queue <message>`** waits its turn instead.
 - **The status line** shows what is running and for how long, background agents and shell commands, queued messages, and the tokens used, such as `⠹ Working 12s · Esc to stop · 2 agents · 1 shell · 3 queued · 45k tokens`.
 - **After each turn,** a line shows its cost, tokens and time next to the session's, such as `▸ Cost: turn $0.42 • session $3.17 | Tokens: turn 48k • session 1.2M | Time: 1m 20s`. Once the context passes 75% of the auto-compact point, a note after each turn suggests `/compact` before you continue.
-- **The input sits between two rules,** and the right end of the status line shows the model and effort level. The terminal window is titled `Cairn · <project folder>`.
+- **The input sits between two rules,** and the right end of the status line shows the model and effort level. The terminal window is titled `Karst · <project folder>`.
 - **A panel opens each session** with the model, directory and git branch, the session id, the permission mode, and the instruction files, MCP servers, skills and plugins loaded. `/clear` wipes the screen and shows it again for the new session.
 - **Typing `/`** opens a menu of commands that narrows as you type. `↑` `↓` choose, `Enter` runs, `Tab` completes.
 - **Permission prompts** list Yes, Yes and don't ask again, and No. `↑` `↓` and `Enter` choose, `y` `a` `n` answer at once, and `Tab` adds a note for the model to the highlighted answer. An approved prompt is taken off the screen; a refused one stays.
@@ -99,10 +113,10 @@ In a session, `/provider` opens a list of providers: type to narrow it, use `↑
 | `/btw <question>` | Ask a side question without adding it to the conversation |
 | `/loop [interval] [prompt]` | Run a prompt again and again: `/loop 5m check the deploy` on a schedule, `/loop check the deploy` at a pace the model picks, `/loop` alone for a default prompt that tends unfinished work and the branch's pull request. `Esc` stops a self-paced loop while it waits, and `/loop stop` stops them all |
 | `/cost`, `/context`, `/status` | Tokens and estimated cost, how full the context is, session details |
-| `/usage` | Tokens and estimated cost on a screen of their own, in tabs: this session, then per day, project and session, like `cairn usage`. `←` `→` switch tabs and `Esc` goes back. `/usage daily`, `/usage projects` or `/usage sessions` opens on that tab |
+| `/usage` | Tokens and estimated cost on a screen of their own, in tabs: this session, then per day, project and session, like `karst usage`. `←` `→` switch tabs and `Esc` goes back. `/usage daily`, `/usage projects` or `/usage sessions` opens on that tab |
 | `/tasks`, `/todos` | Background commands, agents and scheduled jobs, any of which `/tasks stop <id>` stops; and the agent's checklist |
 | `/mcp`, `/skills`, `/agents` | MCP servers, skills and agents in use |
-| `/init` | Write a `CAIRN.md` with notes about this project |
+| `/init` | Write a `KARST.md` with notes about this project |
 | `/exit` | Quit |
 
 ## Permissions and safety
@@ -133,9 +147,9 @@ Choose one with `--permission-mode`, `Shift+Tab` or `/mode`. Rules go in setting
 
 ## Configuration
 
-Settings are read from `~/.cairn/settings.json`, then the project's workspace folder, then `.cairn/settings.json` in the project, then `.cairn/settings.local.json`, then `--settings`. Each overrides the one before.
+Settings are read from `~/.karst/settings.json`, then the project's workspace folder, then `.karst/settings.json` in the project, then `.karst/settings.local.json`, then `--settings`. Each overrides the one before.
 
-What Cairn saves for a project (approvals saved with "don't ask again", `-s local` providers and MCP servers, memory) goes in its workspace folder, `~/.cairn/workspaces/<hash>/`, outside the repository; `cairn doctor` shows which one. Cairn does not create `.cairn/` in a repository for settings: that folder is yours, and its files override the workspace folder.
+What Karst saves for a project (approvals saved with "don't ask again", `-s local` providers and MCP servers, memory) goes in its workspace folder, `~/.karst/workspaces/<hash>/`, outside the repository; `karst doctor` shows which one. Karst does not create `.karst/` in a repository for settings: that folder is yours, and its files override the workspace folder.
 
 ```json
 {
@@ -144,46 +158,46 @@ What Cairn saves for a project (approvals saved with "don't ask again", `-s loca
   "effort": "medium",
   "permissions": { "allow": ["Bash(npm test *)"], "defaultMode": "default" },
   "hooks": {
-    "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": ".cairn/hooks/check.sh" }] }]
+    "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": ".karst/hooks/check.sh" }] }]
   },
   "env": { "NODE_ENV": "development" }
 }
 ```
 
-- **Project instructions:** `CAIRN.md` files, from `~/.cairn/` and from the filesystem root down to the working directory. A directory without one uses `AGENTS.md` or `CLAUDE.md`. More instructions go in `.cairn/rules/*.md`, optionally only for files matching some paths.
-- **MCP servers:** `cairn mcp add <name> <url>` for HTTP, or `cairn mcp add <name> <command> -- <args>` for stdio, such as `cairn mcp add github -e GITHUB_TOKEN=... npx -- -y some-mcp-server`. Then `cairn mcp list`, and `cairn mcp login <name>` for servers that use OAuth.
-- **Skills:** Markdown instructions in `.cairn/skills/<name>/SKILL.md` or `~/.cairn/skills/<name>/SKILL.md`, run as `/<name>` or by the model when relevant. `.cairn/commands/<name>.md` makes a simple command.
-- **Agents:** subagents defined in `.cairn/agents/<name>.md`, with their own prompt, tools and model.
-- **Plugins:** bundles of skills, commands, agents, hooks and MCP servers. `cairn plugin install ./toolkit`, or `--plugin-dir ./toolkit` for one run.
+- **Project instructions:** `KARST.md` files, from `~/.karst/` and from the filesystem root down to the working directory. A directory without one uses `AGENTS.md` or `CLAUDE.md`. More instructions go in `.karst/rules/*.md`, optionally only for files matching some paths.
+- **MCP servers:** `karst mcp add <name> <url>` for HTTP, or `karst mcp add <name> <command> -- <args>` for stdio, such as `karst mcp add github -e GITHUB_TOKEN=... npx -- -y some-mcp-server`. Then `karst mcp list`, and `karst mcp login <name>` for servers that use OAuth.
+- **Skills:** Markdown instructions in `.karst/skills/<name>/SKILL.md` or `~/.karst/skills/<name>/SKILL.md`, run as `/<name>` or by the model when relevant. `.karst/commands/<name>.md` makes a simple command.
+- **Agents:** subagents defined in `.karst/agents/<name>.md`, with their own prompt, tools and model.
+- **Plugins:** bundles of skills, commands, agents, hooks and MCP servers. `karst plugin install ./toolkit`, or `--plugin-dir ./toolkit` for one run.
 - **Hooks** run your commands at points such as `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart` and `Stop`, and can block or adjust what happens.
 
 ## Scripting
 
 ```sh
-cairn -p "summarize the changes" --output-format json
-cairn -p "fix the failing test" --allowedTools "Edit,Bash(npm test *)" --max-turns 20
-cairn -p "list the TODOs" --json-schema schema.json
-git diff | cairn -p "review this" --output-format stream-json
+karst -p "summarize the changes" --output-format json
+karst -p "fix the failing test" --allowedTools "Edit,Bash(npm test *)" --max-turns 20
+karst -p "list the TODOs" --json-schema schema.json
+git diff | karst -p "review this" --output-format stream-json
 ```
 
-With `-p`, nobody is there to answer a permission prompt, so anything that would ask is refused; pre-approve it with `--allowedTools` or a rule. `--max-budget-usd` stops when the estimated spend reaches a limit. `cairn --help` lists every option.
+With `-p`, nobody is there to answer a permission prompt, so anything that would ask is refused; pre-approve it with `--allowedTools` or a rule. `--max-budget-usd` stops when the estimated spend reaches a limit. `karst --help` lists every option.
 
 ## Try it without an API key
 
 ```sh
 mkdir -p /tmp/play && cd /tmp/play
-cairn --provider scripted
+karst --provider scripted
 ```
 
-Replies come from a built-in script instead of a model. Type `help` to see what it does, such as `run <command>`, `demo edit`, `demo ask` or `demo agent`. The tool calls are real, which is why this runs in a scratch directory. To write your own replies, set `CAIRN_SCRIPT` to a JSON file of rules that match what you type.
+Replies come from a built-in script instead of a model. Type `help` to see what it does, such as `run <command>`, `demo edit`, `demo ask` or `demo agent`. The tool calls are real, which is why this runs in a scratch directory. To write your own replies, set `KARST_SCRIPT` to a JSON file of rules that match what you type.
 
 ## Your data
 
-Cairn keeps its files in `~/.cairn` (or `CAIRN_HOME`): settings, saved keys, session transcripts, file checkpoints and memory. Each transcript also records the tokens and estimated cost of every response, which `cairn usage` totals per day, `cairn usage projects` per project and `cairn usage sessions` per session; add `--since`, `--until`, `--project <path>` or `--json`. Scheduled prompts are saved in the workspace folder too: a session's come back when you resume it, and those the model makes durable run in every later session of the project. `cairn purge --dry-run` lists the workspace folder (settings, saved approvals, MCP servers, memory and scheduled jobs), transcripts, file history and logs stored for the current project, and `cairn purge --yes` deletes them. The project's own files, `.cairn/` included, are not touched.
+Karst keeps its files in `~/.karst` (or `KARST_HOME`): settings, saved keys, session transcripts, file checkpoints and memory. Each transcript also records the tokens and estimated cost of every response, which `karst usage` totals per day, `karst usage projects` per project and `karst usage sessions` per session; add `--since`, `--until`, `--project <path>` or `--json`. Scheduled prompts are saved in the workspace folder too: a session's come back when you resume it, and those the model makes durable run in every later session of the project. `karst purge --dry-run` lists the workspace folder (settings, saved approvals, MCP servers, memory and scheduled jobs), transcripts, file history and logs stored for the current project, and `karst purge --yes` deletes them. The project's own files, `.karst/` included, are not touched.
 
 ## Versions
 
-- **0.1.5:** `cairn update` installs the latest version, and each session says when a newer one is on npm (`updateCheck` and `autoUpdates` in settings). `/loop` runs a prompt again and again, on a schedule or at a pace the model picks, and `/tasks` lists background agents and scheduled jobs too, any of which `/tasks stop <id>` stops. What Cairn saves for a project (approvals, `-s local` providers and MCP servers, memory) now goes in `~/.cairn/workspaces/<hash>/`, and a project's existing memory and local MCP servers are moved there. Each session opens with a panel showing the model, directory, branch and what was loaded. Thinking streams in dimmed lines and then folds to one, long pastes show as `[Pasted text #1 +42 lines]`, an approved permission prompt is taken off the screen, and `Cmd+V` pastes images on macOS.
+- **0.1.5:** `karst update` installs the latest version, and each session says when a newer one is on npm (`updateCheck` and `autoUpdates` in settings). `/loop` runs a prompt again and again, on a schedule or at a pace the model picks, and `/tasks` lists background agents and scheduled jobs too, any of which `/tasks stop <id>` stops. What Karst saves for a project (approvals, `-s local` providers and MCP servers, memory) now goes in `~/.karst/workspaces/<hash>/`, and a project's existing memory and local MCP servers are moved there. Each session opens with a panel showing the model, directory, branch and what was loaded. Thinking streams in dimmed lines and then folds to one, long pastes show as `[Pasted text #1 +42 lines]`, an approved permission prompt is taken off the screen, and `Cmd+V` pastes images on macOS.
 - **0.1.4:** `Ctrl+V` pastes an image from the clipboard on macOS and Linux, and image files dropped on the terminal are attached too, as `[Image #1]` placeholders. `/usage` opens a screen of its own with tabs for this session, days, projects and sessions, switched with `←` `→` and closed with `Esc`. Each turn ends with a line showing its cost, tokens and time next to the session's, and with a note to `/compact` once the context is nearly full. The input sits between two rules, the status line shows the model and effort level on the right, and the terminal window is titled after the project.
 - **0.1.3:** each session now saves its tokens and estimated cost. `cairn usage` reports them per day, `cairn usage projects` per project and `cairn usage sessions` per session, also as `/usage` in a session, and after a resume `/cost` shows what the session spent over every run. This is also the first version on npm with the retries from 0.1.2.
 - **0.1.2:** a failed model request is retried up to 10 times, waiting longer each time (from half a second up to 5 minutes), and a reply that breaks off partway is started over. Each retry is shown as it happens. Releases are now published from GitHub Actions, with npm provenance.
@@ -192,4 +206,4 @@ Cairn keeps its files in `~/.cairn` (or `CAIRN_HOME`): settings, saved keys, ses
 
 Development and testing happen on macOS. On Linux the sandbox has not been tried yet, and it has no network proxy, so `allowedDomains` does not work there.
 
-Cairn's behavior follows Claude Code's public documentation, and its system prompt and tool descriptions are adapted from Claude Code's published system prompts.
+Karst's behavior follows Claude Code's public documentation, and its system prompt and tool descriptions are adapted from Claude Code's published system prompts.

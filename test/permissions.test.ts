@@ -10,7 +10,7 @@ import type { RuleBehavior } from '../src/permissions/rules.ts';
 import { analyzeShell } from '../src/permissions/shell.ts';
 
 function tempProject(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), 'cairn-perm-')));
+  return realpathSync(mkdtempSync(join(tmpdir(), 'karst-perm-')));
 }
 
 function engine(cwd: string, mode: PermissionMode = 'default', rules: Partial<Record<RuleBehavior, string[]>> = {}): PermissionEngine {
@@ -299,7 +299,7 @@ describe('permission modes', () => {
   it('never auto-approves writes to protected paths, except in bypass mode', () => {
     const cwd = tempProject();
     const allowAll = { allow: ['Edit', 'Write'] };
-    for (const name of ['.git/config', '.cairn/settings.json', '.bashrc', 'sub/.npmrc', '.mcp.json', '.husky/pre-commit']) {
+    for (const name of ['.git/config', '.karst/settings.json', '.bashrc', 'sub/.npmrc', '.mcp.json', '.husky/pre-commit']) {
       const path = join(cwd, name);
       assert.equal(edit(engine(cwd, 'acceptEdits', allowAll), path).behavior, 'ask', name);
       assert.equal(edit(engine(cwd, 'bypassPermissions'), path).behavior, 'allow', name);

@@ -23,7 +23,7 @@ import type { Prompter, ToolContext } from '../src/tools/types.ts';
 const CLI = resolve(import.meta.dirname, '../src/cli.ts');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEBgIApD5fRAAAAABJRU5ErkJggg==', 'base64');
 
-function tempDir(prefix = 'cairn-media-'): string {
+function tempDir(prefix = 'karst-media-'): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
@@ -330,7 +330,7 @@ describe('background commands', () => {
 
   it('tells the model at its next message, and lets it read the log without a prompt', async () => {
     const dir = tempDir();
-    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    process.env.KARST_HOME = tempDir('karst-taskhome-');
     const provider = new ScriptedProvider([
       { toolCalls: [{ name: 'Bash', input: { command: 'echo logged', run_in_background: true } }] },
       { text: 'waiting' },
@@ -351,7 +351,7 @@ describe('background commands', () => {
     await runtime.shutdown();
   });
 
-  it('stops its background commands when Cairn\'s process dies without stopping them', async () => {
+  it('stops its background commands when Karst\'s process dies without stopping them', async () => {
     const dir = tempDir();
     const script = join(dir, 'crash.ts');
     const source = (path: string): string => JSON.stringify(resolve(import.meta.dirname, '..', path));
@@ -384,8 +384,8 @@ setTimeout(() => process.kill(process.pid, 'SIGKILL'), 300);
     }
   });
 
-  it('gives the process that stops orphans none of Cairn\'s environment', async () => {
-    process.env.CAIRN_TEST_SECRET = 'sk-should-not-leak';
+  it('gives the process that stops orphans none of Karst\'s environment', async () => {
+    process.env.KARST_TEST_SECRET = 'sk-should-not-leak';
     const reaper = new Reaper();
     const sleeper = spawn('/bin/sh', ['-c', 'sleep 5'], { detached: true, stdio: 'ignore' });
     try {
@@ -398,7 +398,7 @@ setTimeout(() => process.kill(process.pid, 'SIGKILL'), 300);
       assert.match(environment, /PATH=/, 'the environment can be seen at all');
       assert.doesNotMatch(environment, /sk-should-not-leak/);
     } finally {
-      delete process.env.CAIRN_TEST_SECRET;
+      delete process.env.KARST_TEST_SECRET;
       reaper.remove(sleeper.pid);
       reaper.close();
       sleeper.kill('SIGKILL');
@@ -410,17 +410,17 @@ setTimeout(() => process.kill(process.pid, 'SIGKILL'), 300);
     const tasks = new TaskRegistry({ logDir: join(dir, 'logs'), maxLogBytes: 1_000 });
     const marker = join(dir, 'later');
     const task = tasks.start('/bin/sh', ['-c', `head -c 5000 /dev/zero | tr '\\\\0' x; sleep 3; echo after; touch ${marker}`], { command: 'chatty', cwd: dir, env: process.env })!;
-    await until(() => readFileSync(task.logPath, 'utf8').includes('Cairn emptied it'), 5_000);
+    await until(() => readFileSync(task.logPath, 'utf8').includes('Karst emptied it'), 5_000);
     await until(() => existsSync(marker), 6_000);
     await Bun.sleep(50);
     const log = readFileSync(task.logPath, 'utf8');
-    assert.match(log, /^\[.*this log passed 1000 bytes, so Cairn emptied it.*\]\nafter\n$/);
+    assert.match(log, /^\[.*this log passed 1000 bytes, so Karst emptied it.*\]\nafter\n$/);
     tasks.stopAll();
   });
 
   it('wakes a subagent when its background command exits, and its report says what came of it', async () => {
     const dir = tempDir();
-    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    process.env.KARST_HOME = tempDir('karst-taskhome-');
     // Rules rather than a list, so the replies do not depend on whether the command ends before
     // or after the subagent is told it is still running.
     const provider = new ScriptedProvider({
@@ -443,7 +443,7 @@ setTimeout(() => process.kill(process.pid, 'SIGKILL'), 300);
 
   it('stops what a subagent started when that subagent is stopped', async () => {
     const dir = tempDir();
-    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    process.env.KARST_HOME = tempDir('karst-taskhome-');
     const marker = join(dir, 'should-not-exist');
     const provider = new ScriptedProvider({
       rules: [
@@ -470,7 +470,7 @@ setTimeout(() => process.kill(process.pid, 'SIGKILL'), 300);
 
   it('lets a print-mode run see how its background command ended before it answers', () => {
     const dir = tempDir();
-    const home = tempDir('cairn-taskhome-');
+    const home = tempDir('karst-taskhome-');
     const marker = join(dir, 'finished');
     const script = join(home, 'script.json');
     writeFileSync(
@@ -485,7 +485,7 @@ setTimeout(() => process.kill(process.pid, 'SIGKILL'), 300);
     );
     const result = spawnSync(process.execPath, [CLI, '--provider', 'scripted', '-p', 'go', '--dangerously-skip-permissions'], {
       cwd: dir,
-      env: { ...process.env, CAIRN_HOME: home, CAIRN_SCRIPT: script },
+      env: { ...process.env, KARST_HOME: home, KARST_SCRIPT: script },
       encoding: 'utf8',
       input: '',
       timeout: 30_000,
@@ -497,7 +497,7 @@ setTimeout(() => process.kill(process.pid, 'SIGKILL'), 300);
 
   it('stops the old conversation\'s background work on /clear, but not on /branch or a failed /resume', async () => {
     const dir = tempDir();
-    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    process.env.KARST_HOME = tempDir('karst-taskhome-');
     const provider = new ScriptedProvider({
       rules: [
         {
@@ -553,8 +553,8 @@ describe('background agents', () => {
   for (const background of [true, false]) {
     it(`refuses a subagent past the limit of how many run at once${background ? ', in the background' : ', inline'}`, async () => {
       const dir = tempDir();
-      process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
-      process.env.CAIRN_MAX_CONCURRENT_SUBAGENTS = '2';
+      process.env.KARST_HOME = tempDir('karst-taskhome-');
+      process.env.KARST_MAX_CONCURRENT_SUBAGENTS = '2';
       try {
         const provider = threeAtOnce(background ? 30_000 : 200);
         const runtime = await createRuntime({ cwd: dir, provider, persist: false, mode: 'bypassPermissions', prompter, backgroundAgents: background });
@@ -565,14 +565,14 @@ describe('background agents', () => {
         assert.equal(refused.length, 1, results(provider).join('\n---\n'));
         await runtime.shutdown();
       } finally {
-        delete process.env.CAIRN_MAX_CONCURRENT_SUBAGENTS;
+        delete process.env.KARST_MAX_CONCURRENT_SUBAGENTS;
       }
     });
   }
 
   it('gives a message that came during an agent\'s last request a turn of its own once it is done', async () => {
     const dir = tempDir();
-    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    process.env.KARST_HOME = tempDir('karst-taskhome-');
     const provider = new ScriptedProvider({
       rules: [
         { regex: '^go$', steps: [{ toolCalls: [{ name: 'Agent', input: { description: 'worker', prompt: 'do the work' } }] }, { text: 'launched' }] },
@@ -621,7 +621,7 @@ describe('monitors', () => {
 
   it('wakes the conversation once for events that come close together', async () => {
     const dir = tempDir();
-    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    process.env.KARST_HOME = tempDir('karst-taskhome-');
     const runtime = await createRuntime({ cwd: dir, provider: new ScriptedProvider([]), persist: false, mode: 'bypassPermissions', prompter });
     let woken = 0;
     runtime.wakes.onWake(() => woken++);
@@ -653,7 +653,7 @@ describe('scheduled prompts', () => {
 
   it('does not take a scheduled prompt for the user being at the terminal', async () => {
     const dir = tempDir();
-    process.env.CAIRN_HOME = tempDir('cairn-taskhome-');
+    process.env.KARST_HOME = tempDir('karst-taskhome-');
     const shown: string[] = [];
     const runtime = await createRuntime({
       cwd: dir,

@@ -4,8 +4,8 @@ dist/
 *.log
 .env
 .env.*
-.cairn/settings.local.json
-CAIRN.local.md
+.karst/settings.local.json
+KARST.local.md
 docs/
 .backup/
 .vscode/

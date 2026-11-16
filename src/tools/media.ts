@@ -43,7 +43,7 @@ function run(file: string, args: string[], signal: AbortSignal): Promise<{ code:
 
 /** `sips` comes with macOS. ImageMagick is the usual choice elsewhere, and may not be there. */
 async function shrinkImage(path: string, signal: AbortSignal): Promise<Buffer | null> {
-  const dir = await mkdtemp(join(tmpdir(), 'cairn-image-'));
+  const dir = await mkdtemp(join(tmpdir(), 'karst-image-'));
   const out = join(dir, 'shrunk.jpg');
   try {
     const attempts: [string, string[]][] = [
@@ -117,7 +117,7 @@ export function parsePageRange(pages: string): { first: number; last: number } |
 }
 
 async function renderPdfPages(path: string, first: number, last: number, signal: AbortSignal): Promise<ToolOutput> {
-  const dir = await mkdtemp(join(tmpdir(), 'cairn-pdf-'));
+  const dir = await mkdtemp(join(tmpdir(), 'karst-pdf-'));
   try {
     const result = await run('pdftoppm', ['-png', '-r', String(PDF_RENDER_DPI), '-f', String(first), '-l', String(last), path, join(dir, 'page')], signal);
     if (result.missing) {

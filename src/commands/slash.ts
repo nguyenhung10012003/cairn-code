@@ -402,7 +402,7 @@ const BUILTINS: Record<string, BuiltinCommand> = {
     run: (_args, runtime) => {
       const { skills, warnings } = runtime.context.skillHost!.load();
       if (skills.size === 0 && warnings.length === 0) {
-        return { output: 'No skills. Add one at .cairn/skills/<name>/SKILL.md or ~/.cairn/skills/<name>/SKILL.md.' };
+        return { output: 'No skills. Add one at .karst/skills/<name>/SKILL.md or ~/.karst/skills/<name>/SKILL.md.' };
       }
       const lines = [...skills.values()].map((skill) => {
         const who = skill.disableModelInvocation ? 'only you' : skill.userInvocable ? 'you and the model' : 'only the model';
@@ -418,7 +418,7 @@ const BUILTINS: Record<string, BuiltinCommand> = {
       const [action, target] = args.split(/\s+/);
       if (!action) {
         const states = runtime.mcp.states();
-        if (states.length === 0) return { output: 'No MCP servers. Add one with `cairn mcp add`.' };
+        if (states.length === 0) return { output: 'No MCP servers. Add one with `karst mcp add`.' };
         return { output: states.map(describeServer).join('\n') };
       }
       const names = runtime.mcp.states().map((state) => state.name);
@@ -600,9 +600,9 @@ const BUILTINS: Record<string, BuiltinCommand> = {
     },
   },
   plugin: {
-    description: 'List loaded plugins. Manage them with `cairn plugin`',
+    description: 'List loaded plugins. Manage them with `karst plugin`',
     run: (_args, runtime) => {
-      if (runtime.plugins.length === 0) return { output: 'No plugins loaded. Use --plugin-dir, or `cairn plugin install <path>`.' };
+      if (runtime.plugins.length === 0) return { output: 'No plugins loaded. Use --plugin-dir, or `karst plugin install <path>`.' };
       return { output: runtime.plugins.map((plugin) => `  ${plugin.name}${plugin.version ? ` ${plugin.version}` : ''}  (${plugin.source})  ${plugin.root}`).join('\n') };
     },
   },

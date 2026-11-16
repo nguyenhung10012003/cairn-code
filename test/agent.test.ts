@@ -13,11 +13,11 @@ import type { ScriptedTurn } from '../src/providers/scripted.ts';
 import type { PermissionAnswer, PermissionPrompt, Prompter } from '../src/tools/types.ts';
 
 beforeAll(() => {
-  process.env.CAIRN_HOME = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-home-')));
+  process.env.KARST_HOME = realpathSync(mkdtempSync(join(tmpdir(), 'karst-home-')));
 });
 
 function project(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), 'cairn-agent-')));
+  return realpathSync(mkdtempSync(join(tmpdir(), 'karst-agent-')));
 }
 
 interface Harness {
@@ -290,7 +290,7 @@ describe('permissions in the loop', () => {
     assert.equal(h.prompts.length, 1);
     const saved = JSON.parse(readFileSync(workspaceSettingsPath(dir), 'utf8')) as { permissions: { allow: string[] } };
     assert.deepEqual(saved.permissions.allow, ['Bash(npm-like run)']);
-    assert.equal(existsSync(join(dir, '.cairn')), false);
+    assert.equal(existsSync(join(dir, '.karst')), false);
   });
 
   it('does not offer a saved rule for a forced prompt', async () => {
@@ -680,12 +680,12 @@ describe('server tools', () => {
 describe('resuming with a frozen system prompt', () => {
   it('sends the recorded prompt, not a rebuilt one, even if the project changed', async () => {
     const dir = project();
-    writeFileSync(join(dir, 'CAIRN.md'), 'Original instructions.');
+    writeFileSync(join(dir, 'KARST.md'), 'Original instructions.');
     const first = await harness([{ text: 'one' }], { dir });
     await collect(first.runtime, 'go');
     const original = JSON.stringify(first.provider.requests[0]!.system);
 
-    writeFileSync(join(dir, 'CAIRN.md'), 'Changed instructions.');
+    writeFileSync(join(dir, 'KARST.md'), 'Changed instructions.');
     const resumed = await harness([{ text: 'two' }], { dir, continueLast: true, appendSystemPrompt: 'Different text' });
     await collect(resumed.runtime, 'again');
     assert.equal(JSON.stringify(resumed.provider.requests[0]!.system), original);
@@ -693,10 +693,10 @@ describe('resuming with a frozen system prompt', () => {
 
   it('a new session picks up the changed instructions', async () => {
     const dir = project();
-    writeFileSync(join(dir, 'CAIRN.md'), 'Original instructions.');
+    writeFileSync(join(dir, 'KARST.md'), 'Original instructions.');
     const first = await harness([{ text: 'one' }], { dir });
     await collect(first.runtime, 'go');
-    writeFileSync(join(dir, 'CAIRN.md'), 'Changed instructions.');
+    writeFileSync(join(dir, 'KARST.md'), 'Changed instructions.');
     const fresh = await harness([{ text: 'two' }], { dir });
     await collect(fresh.runtime, 'go');
     assert.match(JSON.stringify(fresh.provider.requests[0]!.system), /Changed instructions/);
@@ -704,12 +704,12 @@ describe('resuming with a frozen system prompt', () => {
 
   it('a fork and /resume keep the recorded prompt too', async () => {
     const dir = project();
-    writeFileSync(join(dir, 'CAIRN.md'), 'Original instructions.');
+    writeFileSync(join(dir, 'KARST.md'), 'Original instructions.');
     const first = await harness([{ text: 'one' }], { dir });
     await collect(first.runtime, 'go');
     const id = first.runtime.agent.sessionId;
     const original = JSON.stringify(first.provider.requests[0]!.system);
-    writeFileSync(join(dir, 'CAIRN.md'), 'Changed instructions.');
+    writeFileSync(join(dir, 'KARST.md'), 'Changed instructions.');
 
     const fork = await harness([{ text: 'two' }], { dir, resume: id, fork: true });
     await collect(fork.runtime, 'go');
@@ -753,7 +753,7 @@ describe('prompt stability', () => {
 
   it('includes project instructions and the environment', async () => {
     const dir = project();
-    writeFileSync(join(dir, 'CAIRN.md'), 'Always use tabs.');
+    writeFileSync(join(dir, 'KARST.md'), 'Always use tabs.');
     const h = await harness([{ text: 'ok' }], { dir });
     await collect(h.runtime, 'go');
     const system = JSON.stringify(h.provider.requests[0]!.system);

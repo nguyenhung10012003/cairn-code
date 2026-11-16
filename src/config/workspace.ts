@@ -1,6 +1,6 @@
 /**
  * Creates a project's workspace folder (see `workspaceDir`) and moves into it what earlier
- * versions kept elsewhere: memory under `~/.cairn/memory/<project>/`, and local MCP servers
+ * versions kept elsewhere: memory under `~/.karst/memory/<project>/`, and local MCP servers
  * next to the transcripts. A file already in the new place is never replaced.
  */
 import { cpSync, existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';

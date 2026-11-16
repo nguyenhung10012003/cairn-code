@@ -94,7 +94,7 @@ function renderStream(reply: Reply, requestModel: string): string {
 }
 
 beforeAll(async () => {
-  process.env.CAIRN_HOME = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-api-home-')));
+  process.env.KARST_HOME = realpathSync(mkdtempSync(join(tmpdir(), 'karst-api-home-')));
   server = createServer((req, res) => {
     let raw = '';
     req.on('data', (chunk) => (raw += chunk));
@@ -643,7 +643,7 @@ describe('through the whole app', () => {
   const prompter: Prompter = { permission: async () => ({ behavior: 'allow' }), questions: async () => null, approvePlan: async () => true };
 
   function dir(): string {
-    return realpathSync(mkdtempSync(join(tmpdir(), 'cairn-api-')));
+    return realpathSync(mkdtempSync(join(tmpdir(), 'karst-api-')));
   }
 
   it('runs a tool loop, replaying thinking, with stable tools and system prompt', async () => {
@@ -675,7 +675,7 @@ describe('through the whole app', () => {
     ];
     const first = await createRuntime({ cwd, prompter, provider: provider() });
     for await (const _ of first.agent.run('first', new AbortController().signal)) { /* drain */ }
-    writeFileSync(join(cwd, 'CAIRN.md'), 'Instructions added later would change the prompt.');
+    writeFileSync(join(cwd, 'KARST.md'), 'Instructions added later would change the prompt.');
 
     const second = await createRuntime({ cwd, prompter, provider: provider(), continueLast: true });
     for await (const _ of second.agent.run('second', new AbortController().signal)) { /* drain */ }
@@ -770,7 +770,7 @@ describe('through the whole app', () => {
 
   it('hides the key from commands, and from the transcript sent back, in a real CLI run', async () => {
     const cwd = dir();
-    const home = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-api-home2-')));
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'karst-api-home2-')));
     replies = [
       { blocks: [{ type: 'tool_use', id: 'toolu_env', name: 'Bash', stream: '{"command":"env"}' }], stop_reason: 'tool_use', usage: { input_tokens: 100_000, output_tokens: 0 } },
       { blocks: [{ type: 'text', stream: 'All done.' }], usage: { input_tokens: 0, output_tokens: 0 } },
@@ -778,7 +778,7 @@ describe('through the whole app', () => {
     const settings = JSON.stringify({ provider: 'anthropic', providers: { anthropic: { baseUrl, maxRetries: 0 } } });
     const child = spawn(process.execPath, [CLI, '-p', 'print env', '--settings', settings, '--allowedTools', 'Bash(env)', '--output-format', 'json'], {
       cwd,
-      env: { ...process.env, CAIRN_HOME: home, ANTHROPIC_API_KEY: FAKE_KEY },
+      env: { ...process.env, KARST_HOME: home, ANTHROPIC_API_KEY: FAKE_KEY },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -794,7 +794,7 @@ describe('through the whole app', () => {
     assert.equal(served.length, 2);
     assert.equal(sentKey(), FAKE_KEY);
     const sentBack = JSON.stringify(served[1]!.body.messages);
-    assert.match(sentBack, /CAIRN_HOME=/);
+    assert.match(sentBack, /KARST_HOME=/);
     assert.doesNotMatch(sentBack, new RegExp(FAKE_KEY));
   });
 });

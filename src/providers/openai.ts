@@ -23,7 +23,7 @@ const LONG_PROMPT_THRESHOLD = 272_000;
 
 interface OpenAIModelSpec {
   /**
-   * The context Cairn lets a conversation grow to before compacting. These models accept
+   * The context Karst lets a conversation grow to before compacting. These models accept
    * 1,050,000 tokens, but a prompt over 272K is billed at twice the input rate for the whole
    * request, so compaction is set to happen before that.
    */
@@ -272,7 +272,7 @@ export class OpenAIProvider implements ModelProvider {
   }
 
   configurationWarning(): string | undefined {
-    return this.key() ? undefined : `${this.keyVar} is not set, so requests to OpenAI will fail. Save a key with: cairn provider key ${this.name}`;
+    return this.key() ? undefined : `${this.keyVar} is not set, so requests to OpenAI will fail. Save a key with: karst provider key ${this.name}`;
   }
 
   async listModels(): Promise<string[]> {
@@ -281,7 +281,7 @@ export class OpenAIProvider implements ModelProvider {
 
   private headers(): Record<string, string> {
     const key = this.key();
-    if (!key) throw new ProviderError(`No OpenAI API key found. Set ${this.keyVar}, or save one with \`cairn provider key ${this.name}\`.`);
+    if (!key) throw new ProviderError(`No OpenAI API key found. Set ${this.keyVar}, or save one with \`karst provider key ${this.name}\`.`);
     return {
       authorization: `Bearer ${key}`,
       ...(process.env.OPENAI_ORG_ID ? { 'openai-organization': process.env.OPENAI_ORG_ID } : {}),

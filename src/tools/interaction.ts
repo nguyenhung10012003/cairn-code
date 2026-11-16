@@ -368,7 +368,7 @@ A fork runs in the background and keeps its tool output out of your context. If 
       },
       effort: {
         description:
-          'Reasoning effort for this agent. Set this ONLY when the user, or instructions such as CAIRN.md or a skill, explicitly ask that this agent or delegated work run at a specific effort level, never on your own judgment; otherwise omit it and the agent runs at its usual effort. Ignored for subagent_type: "fork": a fork runs at your own effort.',
+          'Reasoning effort for this agent. Set this ONLY when the user, or instructions such as KARST.md or a skill, explicitly ask that this agent or delegated work run at a specific effort level, never on your own judgment; otherwise omit it and the agent runs at its usual effort. Ignored for subagent_type: "fork": a fork runs at your own effort.',
         type: 'string',
         enum: ['low', 'medium', 'high', 'xhigh', 'max'],
       },

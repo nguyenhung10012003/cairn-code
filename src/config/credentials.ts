@@ -1,5 +1,5 @@
 /**
- * API keys saved with `cairn provider key` or /provider, in ~/.cairn/credentials.json with mode
+ * API keys saved with `karst provider key` or /provider, in ~/.karst/credentials.json with mode
  * 0600. Keys never go into settings files, which a project may share.
  *
  * Each key is saved with the endpoint it was entered for, and is only ever sent there. Otherwise

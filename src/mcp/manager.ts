@@ -138,7 +138,7 @@ export class McpManager implements McpToolBackend {
       command: config.command,
       args: config.args ?? [],
       // Only a minimal environment plus what the config names: a server never sees API keys.
-      env: { ...getDefaultEnvironment(), CAIRN_PROJECT_DIR: this.options.projectDir, ...config.env },
+      env: { ...getDefaultEnvironment(), KARST_PROJECT_DIR: this.options.projectDir, ...config.env },
       cwd: config.cwd ?? this.options.projectDir,
       stderr: 'pipe',
     });

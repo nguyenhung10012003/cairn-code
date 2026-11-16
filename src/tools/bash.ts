@@ -85,9 +85,9 @@ function startInBackground(command: string, limitMs: number | undefined, options
 }
 
 function runForeground(command: string, timeoutMs: number, options: CommandOptions, ctx: ToolContext): Promise<ToolOutput> {
-  const cwdFile = join(tmpdir(), `cairn-cwd-${randomUUID()}`);
+  const cwdFile = join(tmpdir(), `karst-cwd-${randomUUID()}`);
   // The shell exits after each call, so its final directory is carried over by hand.
-  const wrapped = `${command}\n__cairn_status=$?; pwd -P > '${cwdFile}' 2>/dev/null; exit $__cairn_status`;
+  const wrapped = `${command}\n__karst_status=$?; pwd -P > '${cwdFile}' 2>/dev/null; exit $__karst_status`;
 
   return new Promise((resolvePromise) => {
     const output = new OutputBuffer();

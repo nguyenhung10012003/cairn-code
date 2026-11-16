@@ -1,5 +1,5 @@
 /**
- * What Cairn needs to know per Claude model. Prices are USD per million tokens, taken from
+ * What Karst needs to know per Claude model. Prices are USD per million tokens, taken from
  * platform.claude.com/docs/en/about-claude/pricing on 2026-11-02. Costs built from them are
  * estimates for the user's information and are not a bill.
  */
@@ -8,7 +8,7 @@ export interface ModelPrices {
   input: number;
   output: number;
   cacheRead: number;
-  /** 5-minute cache writes, the only TTL Cairn uses. */
+  /** 5-minute cache writes, the only TTL Karst uses. */
   cacheWrite: number;
 }
 

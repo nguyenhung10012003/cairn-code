@@ -1,14 +1,14 @@
 {
-  "name": "cairn-code",
+  "name": "karst-code",
   "version": "0.1.5",
   "description": "A coding agent for the terminal: tools, permissions, sandbox, MCP, skills and plugins, on Anthropic, OpenAI, Ollama or any Chat Completions API.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nguyenhung10012003/cairn-code.git"
+    "url": "git+https://github.com/nguyenhung10012003/karst-code.git"
   },
-  "homepage": "https://github.com/nguyenhung10012003/cairn-code#readme",
+  "homepage": "https://github.com/nguyenhung10012003/karst-code#readme",
   "bugs": {
-    "url": "https://github.com/nguyenhung10012003/cairn-code/issues"
+    "url": "https://github.com/nguyenhung10012003/karst-code/issues"
   },
   "keywords": [
     "cli",
@@ -25,7 +25,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "cairn": "dist/npm/cli.js"
+    "karst": "dist/npm/cli.js"
   },
   "engines": {
     "node": ">=22"
@@ -35,7 +35,7 @@
     "test": "bun test --timeout 60000",
     "test:live": "bun --no-env-file --config=/dev/null test/live/anthropic.live.ts",
     "typecheck": "tsc --noEmit",
-    "build": "bun build src/cli.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/cairn",
+    "build": "bun build src/cli.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/karst",
     "build:npm": "bun scripts/build-npm.ts",
     "check": "bun run typecheck && bun test --timeout 60000",
     "release": "bun run check && bun run build:npm && npm publish ./dist/npm",

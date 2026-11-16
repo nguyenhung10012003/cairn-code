@@ -3,7 +3,7 @@
  * and never pretends to be one.
  *
  * A script is either a list of responses, played in order to every request (the tests use this),
- * or a set of rules matched against what the user typed, for trying Cairn by hand.
+ * or a set of rules matched against what the user typed, for trying Karst by hand.
  */
 import { readFileSync } from 'node:fs';
 import { SUMMARIZER_SYSTEM } from '../core/compaction.ts';
@@ -124,7 +124,7 @@ export class ScriptedProvider implements ModelProvider {
   /** The rules in mock-demo.json, for when no script is given. */
   static demo(): ScriptedProvider {
     return new ScriptedProvider(demoScript as MockScript, {
-      warning: 'Replies come from the built-in mock script, not a model. Type "help" to see what it does, or set CAIRN_SCRIPT to use your own.',
+      warning: 'Replies come from the built-in mock script, not a model. Type "help" to see what it does, or set KARST_SCRIPT to use your own.',
     });
   }
 
@@ -188,7 +188,7 @@ export class ScriptedProvider implements ModelProvider {
    * step is how many replies have followed it.
    */
   private ruleTurn(request: ProviderRequest): ScriptedTurn {
-    // Requests Cairn makes for itself, which no rule is written for.
+    // Requests Karst makes for itself, which no rule is written for.
     if (request.system[0]?.text === SUMMARIZER_SYSTEM) {
       return { text: `<summary>(mock) A summary of ${request.messages.length} message(s) would go here.</summary>` };
     }

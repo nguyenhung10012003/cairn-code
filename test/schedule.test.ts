@@ -25,9 +25,9 @@ function tempDir(prefix: string): string {
 let home: string;
 let project: string;
 beforeEach(() => {
-  home = tempDir('cairn-schedule-home-');
-  project = tempDir('cairn-schedule-project-');
-  process.env.CAIRN_HOME = home;
+  home = tempDir('karst-schedule-home-');
+  project = tempDir('karst-schedule-project-');
+  process.env.KARST_HOME = home;
 });
 
 /** A pinned one-shot expression for the minute `at` starts. */
@@ -289,11 +289,11 @@ describe('/loop', () => {
   it('takes its default prompt from loop.md, the project\'s only when trusted', () => {
     assert.deepEqual(defaultLoopPrompt(project, false), { text: DEFAULT_LOOP_PROMPT, source: 'built-in' });
     writeFileSync(join(home, 'loop.md'), 'Mine.\n');
-    mkdirSync(join(project, '.cairn'), { recursive: true });
-    writeFileSync(join(project, '.cairn', 'loop.md'), `Project. ${'x'.repeat(30_000)}`);
+    mkdirSync(join(project, '.karst'), { recursive: true });
+    writeFileSync(join(project, '.karst', 'loop.md'), `Project. ${'x'.repeat(30_000)}`);
     assert.equal(defaultLoopPrompt(project, false).text, 'Mine.');
     const fromProject = defaultLoopPrompt(project, true);
-    assert.equal(fromProject.source, join(project, '.cairn', 'loop.md'));
+    assert.equal(fromProject.source, join(project, '.karst', 'loop.md'));
     assert.equal(Buffer.byteLength(fromProject.text), 25_000);
   });
 

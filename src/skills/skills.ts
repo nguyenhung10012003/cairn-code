@@ -1,5 +1,5 @@
 /**
- * Skills: Markdown instructions the model or the user can load on demand. `.cairn/commands/*.md`
+ * Skills: Markdown instructions the model or the user can load on demand. `.karst/commands/*.md`
  * files are the same thing in a simpler form. This module only reads and renders text; running
  * a skill's commands is in tools/skill.ts.
  */
@@ -327,7 +327,7 @@ export interface SkillVariables {
 }
 
 const PLACEHOLDER =
-  /\\\$|\$ARGUMENTS\[(\d+)\]|\$ARGUMENTS\b|\$(\d+)|\$\{(?:CAIRN|CLAUDE)_(SKILL_DIR|PROJECT_DIR|SESSION_ID|EFFORT)\}|\$([A-Za-z_][A-Za-z0-9_-]*)/g;
+  /\\\$|\$ARGUMENTS\[(\d+)\]|\$ARGUMENTS\b|\$(\d+)|\$\{(?:KARST|CLAUDE)_(SKILL_DIR|PROJECT_DIR|SESSION_ID|EFFORT)\}|\$([A-Za-z_][A-Za-z0-9_-]*)/g;
 
 /** One pass only, so text coming from an argument is never expanded again. */
 export function substitute(

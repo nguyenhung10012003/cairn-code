@@ -15,14 +15,14 @@ import type { Sandbox, SandboxSettings } from '../src/sandbox/sandbox.ts';
 const isMac = process.platform === 'darwin';
 
 function tempDir(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), 'cairn-box-')));
+  return realpathSync(mkdtempSync(join(tmpdir(), 'karst-box-')));
 }
 
 const madeOutside: string[] = [];
 
 /** Outside the temp directory, which is writable from inside on purpose. */
 function outsideDir(): string {
-  const dir = realpathSync(mkdtempSync('/var/tmp/cairn-box-outside-'));
+  const dir = realpathSync(mkdtempSync('/var/tmp/karst-box-outside-'));
   madeOutside.push(dir);
   return dir;
 }
@@ -70,7 +70,7 @@ describe.skipIf(!isMac)('commands inside the sandbox', () => {
   it('can write in the working directory and the temp directory', () => {
     assert.equal(run(sandbox, dir, `echo hi > ${join(dir, 'inside.txt')}`).status, 0);
     assert.equal(readFileSync(join(dir, 'inside.txt'), 'utf8'), 'hi\n');
-    assert.equal(run(sandbox, dir, `echo hi > "${join(tmpdir(), `cairn-box-${process.pid}`)}"`).status, 0);
+    assert.equal(run(sandbox, dir, `echo hi > "${join(tmpdir(), `karst-box-${process.pid}`)}"`).status, 0);
     assert.equal(run(sandbox, dir, 'echo hi > /dev/null').status, 0);
   });
 
@@ -93,7 +93,7 @@ describe.skipIf(!isMac)('commands inside the sandbox', () => {
   });
 
   it('cannot change the files that decide what runs later', () => {
-    for (const relative of ['.git/hooks/pre-commit', '.git/config', '.cairn/settings.json', '.cairn/settings.local.json', '.cairn/hooks/x', '.mcp.json', 'CAIRN.md', 'packages/a/.git/hooks/post-commit']) {
+    for (const relative of ['.git/hooks/pre-commit', '.git/config', '.karst/settings.json', '.karst/settings.local.json', '.karst/hooks/x', '.mcp.json', 'KARST.md', 'packages/a/.git/hooks/post-commit']) {
       const path = join(dir, relative);
       mkdirSync(join(path, '..'), { recursive: true });
       assert.notEqual(run(sandbox, dir, `echo evil > ${path}`).status, 0, relative);

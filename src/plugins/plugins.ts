@@ -1,6 +1,6 @@
 /**
  * Plugins bundle skills, commands, agents, hooks, MCP servers and executables. A plugin comes
- * from --plugin-dir or from `cairn plugin install`, both of them a person's explicit choice, so
+ * from --plugin-dir or from `karst plugin install`, both of them a person's explicit choice, so
  * unlike a repository's own files it does not wait for workspace trust.
  */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { appHome, userSettingsPath } from '../config/paths.ts';
 import type { HookGroup, HooksConfig } from '../config/settings.ts';
 
-const MANIFEST_DIRS = ['.cairn-plugin', '.claude-plugin'];
+const MANIFEST_DIRS = ['.karst-plugin', '.claude-plugin'];
 const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 
 export interface PluginManifest {
@@ -109,7 +109,7 @@ export function readPlugin(rootGiven: string, source: Plugin['source']): PluginR
   if (!NAME_PATTERN.test(name)) errors.push(`Invalid plugin name: ${JSON.stringify(name)}. Use letters, digits, dots, dashes and underscores.`);
   if (manifestPath && manifest.version === undefined) warnings.push('plugin.json has no version.');
   if (manifestPath && manifest.description === undefined) warnings.push('plugin.json has no description.');
-  if (existsSync(join(root, 'CLAUDE.md')) || existsSync(join(root, 'CAIRN.md'))) warnings.push('An instruction file at the plugin root is not loaded. Put instructions in a skill.');
+  if (existsSync(join(root, 'CLAUDE.md')) || existsSync(join(root, 'KARST.md'))) warnings.push('An instruction file at the plugin root is not loaded. Put instructions in a skill.');
 
   const paths = (value: unknown, label: string, allowRoot = false): string[] =>
     asList(value).flatMap((given) => componentPath(root, given, label, errors, allowRoot) ?? []);
@@ -206,12 +206,12 @@ export function loadPlugins(options: { flagDirs?: string[]; enabled?: Record<str
 /** Substitutes the plugin's paths in anything it declares. Scripts built for Claude Code use the other spelling. */
 export function expandPluginVars(text: string, plugin: Plugin, projectDir: string): string {
   return text
-    .replace(/\$\{(?:CAIRN|CLAUDE)_PLUGIN_ROOT\}/g, plugin.root)
-    .replace(/\$\{(?:CAIRN|CLAUDE)_PLUGIN_DATA\}/g, () => {
+    .replace(/\$\{(?:KARST|CLAUDE)_PLUGIN_ROOT\}/g, plugin.root)
+    .replace(/\$\{(?:KARST|CLAUDE)_PLUGIN_DATA\}/g, () => {
       mkdirSync(plugin.dataDir, { recursive: true });
       return plugin.dataDir;
     })
-    .replace(/\$\{(?:CAIRN|CLAUDE)_PROJECT_DIR\}/g, projectDir);
+    .replace(/\$\{(?:KARST|CLAUDE)_PROJECT_DIR\}/g, projectDir);
 }
 
 function expandDeep<T>(value: T, plugin: Plugin, projectDir: string): T {
@@ -222,8 +222,8 @@ function expandDeep<T>(value: T, plugin: Plugin, projectDir: string): T {
 export function pluginHooks(plugin: Plugin, projectDir: string, warnings: string[]): HooksConfig {
   const merged: HooksConfig = {};
   const env = {
-    CAIRN_PLUGIN_ROOT: plugin.root,
-    CAIRN_PLUGIN_DATA: plugin.dataDir,
+    KARST_PLUGIN_ROOT: plugin.root,
+    KARST_PLUGIN_DATA: plugin.dataDir,
     CLAUDE_PLUGIN_ROOT: plugin.root,
     CLAUDE_PLUGIN_DATA: plugin.dataDir,
     CLAUDE_PROJECT_DIR: projectDir,
@@ -285,10 +285,10 @@ function enabledMap(): Record<string, boolean> {
   }
 }
 
-const USAGE = `Usage: cairn plugin <command>
+const USAGE = `Usage: karst plugin <command>
 
   validate <path> [--strict]      Check a plugin without loading it
-  install <path>                  Copy a local plugin into ~/.cairn/plugins
+  install <path>                  Copy a local plugin into ~/.karst/plugins
   uninstall <name> [--keep-data]  Remove an installed plugin
   list                            Show installed plugins
   enable <name>                   Turn an installed plugin on

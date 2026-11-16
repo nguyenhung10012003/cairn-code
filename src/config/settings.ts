@@ -1,9 +1,9 @@
 /**
  * Layered settings: user < workspace < project < project local < --settings. The workspace layer
  * is the file this machine keeps for the project outside the repository, where the app saves what
- * it is told to keep; the repository's `.cairn/` files are the user's own, and override it.
+ * it is told to keep; the repository's `.karst/` files are the user's own, and override it.
  * Permission rules from every layer accumulate, and scalars take the last value. Untrusted
- * `.cairn/` layers contribute only their restrictive rules, because hooks, allow rules and
+ * `.karst/` layers contribute only their restrictive rules, because hooks, allow rules and
  * provider choice can all be used by a malicious repository to run code or send data elsewhere.
  * The workspace layer always applies in full: like the user's settings, no repository can write it.
  */

@@ -211,7 +211,7 @@ export function canonicalize(path: string): string {
 }
 
 const PROTECTED_DIRS = new Set([
-  '.git', '.vscode', '.idea', '.husky', '.cargo', '.devcontainer', '.yarn', '.mvn', '.cairn', '.claude',
+  '.git', '.vscode', '.idea', '.husky', '.cargo', '.devcontainer', '.yarn', '.mvn', '.karst', '.cairn', '.claude',
 ]);
 const PROTECTED_FILES = new Set([
   '.gitconfig', '.gitmodules', '.bashrc', '.bash_profile', '.bash_login', '.bash_aliases', '.bash_logout',

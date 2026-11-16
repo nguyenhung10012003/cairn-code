@@ -1,7 +1,7 @@
 /**
  * Prompt text taken from Claude Code's published system prompts
  * (github.com/asgeirtj/system_prompts_leaks, Anthropic/claude-code, Opus 5.5 build), with the
- * product name, file names and paths changed to Cairn's, and passages about features Cairn does
+ * product name, file names and paths changed to Karst's, and passages about features Karst does
  * not have left out. Keep edits to the wording here deliberate: tests pin some of it.
  */
 import { APP_DISPLAY_NAME, INSTRUCTION_FILE, PROJECT_DIR } from '../config/paths.ts';

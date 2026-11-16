@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "cairn-code",
+      "name": "karst-code",
       "dependencies": {
         "@anthropic-ai/sdk": "^1.3.0",
         "@modelcontextprotocol/sdk": "^1.32.2",

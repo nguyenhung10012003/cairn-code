@@ -360,7 +360,7 @@ function compactHint(runtime: Runtime): string | null {
   return `${full} Consider /compact before you continue.${auto}`;
 }
 
-/** `Cairn · my-project`, for the terminal's window or tab. */
+/** `Karst · my-project`, for the terminal's window or tab. */
 function windowTitle(projectDir: string): string {
   return `${APP_DISPLAY_NAME} · ${basename(projectDir) || projectDir}`;
 }

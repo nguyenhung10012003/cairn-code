@@ -3,6 +3,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runDoctor, runPurge } from './commands/maintenance.ts';
+import { legacyHomeHint, runMigrateCommand } from './commands/migrate.ts';
 import { parseTokenCount } from './commands/slash.ts';
 import { checkForUpdate, runUpdateCommand } from './commands/update.ts';
 import { runUsageCommand } from './commands/usage.ts';
@@ -67,7 +68,7 @@ Options:
       --bare                        Skip hooks, installed plugins, and finding instructions and skills
       --safe-mode                   Turn off every customization, to troubleshoot a broken setup
       --restricted                  Remove tools that run code, and ignore settings files
-  -w, --worktree [name]             Run in a new git worktree under .cairn/worktrees
+  -w, --worktree [name]             Run in a new git worktree under .karst/worktrees
   -n, --name <name>                 Name this session, so --resume can find it
       --output-format <format>      With -p: text, json or stream-json
       --input-format <format>       With -p: text, or stream-json for one JSON message per line
@@ -95,6 +96,7 @@ Commands:
   usage [daily|projects|sessions]   Tokens and estimated cost from saved sessions
   update                            Install the latest version
   purge [path]                      Delete a project's saved data from this machine
+  migrate [--dry-run]               Move what Cairn, this program's earlier name, saved in ~/.cairn
 `;
 
 /** These take an optional value, which parseArgs cannot express, so a bare flag gets an empty one. */
@@ -172,6 +174,7 @@ async function main(): Promise<number> {
   if (subcommand === 'purge') return runPurge(process.argv.slice(3), realpathSync(process.cwd()));
   if (subcommand === 'usage') return runUsageCommand(process.argv.slice(3), realpathSync(process.cwd()));
   if (subcommand === 'update') return runUpdateCommand(process.argv.slice(3));
+  if (subcommand === 'migrate') return runMigrateCommand(process.argv.slice(3));
   const { values, positionals } = parseArgs({
     args: normalizeOptionalFlags(process.argv.slice(2)),
     allowPositionals: true,
@@ -238,6 +241,9 @@ async function main(): Promise<number> {
     process.stdout.write(`${VERSION}\n`);
     return 0;
   }
+  // Before anything creates Karst's own home, which is what makes this show only once.
+  const legacyHint = legacyHomeHint();
+  if (legacyHint) process.stderr.write(`${style.cyan(legacyHint)}\n`);
 
   const fail = (message: string): number => {
     process.stderr.write(`${message}\n`);

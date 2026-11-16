@@ -1,4 +1,4 @@
-/** The `cairn mcp ...` subcommands. */
+/** The `karst mcp ...` subcommands. */
 import { realpathSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { APP_NAME } from '../config/paths.ts';

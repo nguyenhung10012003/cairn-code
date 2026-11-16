@@ -1,7 +1,7 @@
 /**
  * Any server that speaks OpenAI's Chat Completions API (`/chat/completions`): DeepSeek, Groq,
  * OpenRouter, Together, Mistral, LM Studio, vLLM, llama.cpp and many others. It is added under a
- * name of its own, such as `cairn provider add deepseek --type openai-chat --base-url ...`.
+ * name of its own, such as `karst provider add deepseek --type openai-chat --base-url ...`.
  *
  * These servers differ in which optional parameters they accept, so a parameter the server
  * rejects is dropped for that model and the request is sent again. Reasoning text that a server
@@ -210,10 +210,10 @@ export class OpenAIChatProvider implements ModelProvider {
   }
 
   configurationWarning(): string | undefined {
-    if (!this.baseUrl) return `The provider "${this.name}" has no base URL. Add one with: cairn provider add ${this.name} --base-url <url>`;
+    if (!this.baseUrl) return `The provider "${this.name}" has no base URL. Add one with: karst provider add ${this.name} --base-url <url>`;
     if (!this.defaultModel) return `The provider "${this.name}" has no model set. Choose one with /model.`;
     if (!this.key() && !this.isLocal()) {
-      return `No API key for "${this.name}"${this.keyVar ? ` (${this.keyVar} is not set)` : ''}. Save one with: cairn provider key ${this.name}`;
+      return `No API key for "${this.name}"${this.keyVar ? ` (${this.keyVar} is not set)` : ''}. Save one with: karst provider key ${this.name}`;
     }
     return undefined;
   }
@@ -226,7 +226,7 @@ export class OpenAIChatProvider implements ModelProvider {
   private describeError(status: number, body: string): ProviderError {
     const message = errorMessage(body);
     const options = { status };
-    const keyHint = this.keyVar ? `Check ${this.keyVar}, or save a key with \`cairn provider key ${this.name}\`.` : `Save a new key with \`cairn provider key ${this.name}\`.`;
+    const keyHint = this.keyVar ? `Check ${this.keyVar}, or save a key with \`karst provider key ${this.name}\`.` : `Save a new key with \`karst provider key ${this.name}\`.`;
     if (status === 401) return new ProviderError(`${this.name} rejected the API key. ${keyHint} ${message}`, options);
     if (status === 403) return new ProviderError(`${this.name} refused the request (HTTP 403): ${message}`, options);
     if (status === 404) {
@@ -253,7 +253,7 @@ export class OpenAIChatProvider implements ModelProvider {
   }
 
   private async *attempt(request: ProviderRequest): AsyncGenerator<StreamEvent> {
-    if (!this.baseUrl) throw new ProviderError(`The provider "${this.name}" has no base URL. Add one with: cairn provider add ${this.name} --base-url <url>`);
+    if (!this.baseUrl) throw new ProviderError(`The provider "${this.name}" has no base URL. Add one with: karst provider add ${this.name} --base-url <url>`);
     if (!request.model) throw new ProviderError(`No model is set for "${this.name}". Choose one with /model, or --model.`);
     for (let attempt = 0; ; attempt++) {
       const dropped = this.dropped.get(request.model) ?? new Set<OptionalParam>();

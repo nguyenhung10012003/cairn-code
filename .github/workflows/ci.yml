@@ -66,7 +66,7 @@ jobs:
 
       - name: Check the tarball holds only the bundle, the npm README and a manifest without scripts
         run: |
-          tarball=$(ls "$RUNNER_TEMP"/cairn-code-*.tgz)
+          tarball=$(ls "$RUNNER_TEMP"/karst-code-*.tgz)
           files=$(tar -tzf "$tarball" | sort | tr '\n' ' ')
           echo "$files"
           test "$files" = "package/README.md package/cli.js package/package.json "
@@ -74,22 +74,22 @@ jobs:
           tar -xOzf "$tarball" package/package.json | node -e '
             const m = JSON.parse(require("fs").readFileSync(0, "utf8"));
             for (const field of ["private", "scripts", "devDependencies"]) if (field in m) throw new Error("published manifest has " + field);
-            if (m.bin?.cairn !== "cli.js") throw new Error("bin.cairn should be cli.js");
+            if (m.bin?.karst !== "cli.js") throw new Error("bin.karst should be cli.js");
           '
 
       - name: Install globally
-        run: npm install -g "$RUNNER_TEMP"/cairn-code-*.tgz
+        run: npm install -g "$RUNNER_TEMP"/karst-code-*.tgz
 
       - name: Run the installed command
         working-directory: ${{ runner.temp }}
         env:
-          CAIRN_HOME: ${{ runner.temp }}/cairn-home
-          CAIRN_SCRIPT: ${{ runner.temp }}/script.json
+          KARST_HOME: ${{ runner.temp }}/karst-home
+          KARST_SCRIPT: ${{ runner.temp }}/script.json
         run: |
-          cairn --version
-          echo '[{"toolCalls":[{"name":"Bash","input":{"command":"echo smoke > out.txt"}}]},{"text":"done"}]' > "$CAIRN_SCRIPT"
-          reply=$(cairn --provider scripted -p go --dangerously-skip-permissions < /dev/null)
+          karst --version
+          echo '[{"toolCalls":[{"name":"Bash","input":{"command":"echo smoke > out.txt"}}]},{"text":"done"}]' > "$KARST_SCRIPT"
+          reply=$(karst --provider scripted -p go --dangerously-skip-permissions < /dev/null)
           test "$reply" = "done"
           test "$(cat out.txt)" = "smoke"
-          # Without CAIRN_SCRIPT, the built-in mock rules answer, so they must be in the bundle.
-          CAIRN_SCRIPT='' cairn --provider scripted -p 'run echo built-in rules' --dangerously-skip-permissions < /dev/null | grep -q 'built-in rules'
+          # Without KARST_SCRIPT, the built-in mock rules answer, so they must be in the bundle.
+          KARST_SCRIPT='' karst --provider scripted -p 'run echo built-in rules' --dangerously-skip-permissions < /dev/null | grep -q 'built-in rules'

@@ -38,7 +38,7 @@ export interface TaskRegistryOptions {
   defaultLimitMs?: number;
   /** Tells the conversation that a command stopped. */
   onFinished?: (task: BackgroundTask, message: string) => void;
-  /** Stops what is still running if Cairn's process ends without doing so. Shared by a session's registries. */
+  /** Stops what is still running if Karst's process ends without doing so. Shared by a session's registries. */
   reaper?: Reaper;
   /** The size at which a running command's log is cleared. */
   maxLogBytes?: number;
@@ -77,7 +77,7 @@ export class TaskRegistry {
   }
 
   /**
-   * Keeps a detached process group from outliving Cairn's process, until the returned function
+   * Keeps a detached process group from outliving Karst's process, until the returned function
    * is called once it has exited. For foreground commands too, which are detached so a timeout
    * can end everything they started.
    */
@@ -104,9 +104,9 @@ export class TaskRegistry {
           if (statSync(task.logPath).size <= this.maxLogBytes) continue;
           truncateSync(task.logPath, 0);
           const size = this.maxLogBytes >= 1024 * 1024 ? `${Math.round(this.maxLogBytes / (1024 * 1024))} MB` : `${this.maxLogBytes} bytes`;
-          appendFileSync(task.logPath, `[${new Date().toISOString()}: this log passed ${size}, so Cairn emptied it. The command is still running; what it printed before this line is gone.]\n`);
+          appendFileSync(task.logPath, `[${new Date().toISOString()}: this log passed ${size}, so Karst emptied it. The command is still running; what it printed before this line is gone.]\n`);
         } catch {
-          // The log was removed, as by cairn purge. There is nothing to bound.
+          // The log was removed, as by karst purge. There is nothing to bound.
         }
       }
     }, LOG_CHECK_MS);

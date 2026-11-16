@@ -25,16 +25,16 @@ const CLI = resolve(import.meta.dirname, '../src/cli.ts');
 
 let home: string;
 beforeAll(() => {
-  home = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-skills-home-')));
+  home = realpathSync(mkdtempSync(join(tmpdir(), 'karst-skills-home-')));
 });
 beforeEach(() => {
   // Each test gets an empty personal skills folder.
-  home = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-skills-home-')));
-  process.env.CAIRN_HOME = home;
+  home = realpathSync(mkdtempSync(join(tmpdir(), 'karst-skills-home-')));
+  process.env.KARST_HOME = home;
 });
 
 function project(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), 'cairn-skills-')));
+  return realpathSync(mkdtempSync(join(tmpdir(), 'karst-skills-')));
 }
 
 function writeSkill(root: string, name: string, content: string): string {
@@ -44,7 +44,7 @@ function writeSkill(root: string, name: string, content: string): string {
   return dir;
 }
 
-const projectSkill = (dir: string, name: string, content: string): string => writeSkill(join(dir, '.cairn'), name, content);
+const projectSkill = (dir: string, name: string, content: string): string => writeSkill(join(dir, '.karst'), name, content);
 
 describe('frontmatter', () => {
   it('parses real YAML: folded text, colons, lists', () => {
@@ -106,10 +106,10 @@ describe('finding skills', () => {
 
   it('treats command files as skills, nested by colons, and lets a skill win', () => {
     const dir = project();
-    mkdirSync(join(dir, '.cairn/commands/frontend'), { recursive: true });
-    writeFileSync(join(dir, '.cairn/commands/deploy.md'), '---\ndescription: As a command\n---\nCommand body');
-    writeFileSync(join(dir, '.cairn/commands/frontend/button.md'), 'Make a button.');
-    writeFileSync(join(dir, '.cairn/commands/notes.txt'), 'not a command');
+    mkdirSync(join(dir, '.karst/commands/frontend'), { recursive: true });
+    writeFileSync(join(dir, '.karst/commands/deploy.md'), '---\ndescription: As a command\n---\nCommand body');
+    writeFileSync(join(dir, '.karst/commands/frontend/button.md'), 'Make a button.');
+    writeFileSync(join(dir, '.karst/commands/notes.txt'), 'not a command');
     projectSkill(dir, 'deploy', '---\ndescription: As a skill\n---\nSkill body');
     const { skills } = loadSkills(dir, true);
     assert.equal(skills.get('deploy')!.description, 'As a skill');
@@ -224,7 +224,7 @@ describe('filling in arguments', () => {
     assert.equal(fill('$0 and $1', 'a b'), 'a and b');
     assert.equal(fill('$ARGUMENTS[1]', 'a b'), 'b');
     assert.equal(fill('$issue / $branch-name', 'a b'), 'a / b');
-    assert.equal(fill('${CAIRN_SKILL_DIR} ${CAIRN_PROJECT_DIR} ${CAIRN_SESSION_ID} ${CAIRN_EFFORT}'), '/skills/x /proj sess-1 high');
+    assert.equal(fill('${KARST_SKILL_DIR} ${KARST_PROJECT_DIR} ${KARST_SESSION_ID} ${KARST_EFFORT}'), '/skills/x /proj sess-1 high');
   });
 
   it('groups quoted arguments', () => {
@@ -246,8 +246,8 @@ describe('filling in arguments', () => {
   });
 
   it('never expands text that came from an argument', () => {
-    assert.equal(fill('$0', '$1 ${CAIRN_SESSION_ID}'), '$1');
-    assert.equal(fill('$ARGUMENTS', '$0 ${CAIRN_SESSION_ID}'), '$0 ${CAIRN_SESSION_ID}');
+    assert.equal(fill('$0', '$1 ${KARST_SESSION_ID}'), '$1');
+    assert.equal(fill('$ARGUMENTS', '$0 ${KARST_SESSION_ID}'), '$0 ${KARST_SESSION_ID}');
   });
 
   it('reports whether any argument was used', () => {
@@ -289,7 +289,7 @@ describe('finding injected commands', () => {
 });
 
 describe('permission rules for skills', () => {
-  const cwd = '/tmp/cairn-skill-perms';
+  const cwd = '/tmp/karst-skill-perms';
   function engine(mode: PermissionMode = 'default', rules: Partial<Record<RuleBehavior, string[]>> = {}): PermissionEngine {
     const parsed = (['allow', 'ask', 'deny'] as const).flatMap((behavior) => (rules[behavior] ?? []).map((text) => parseRule(text, behavior, 'user', cwd)!));
     return new PermissionEngine({ mode, rules: parsed, workingDirs: [cwd], cwd: () => cwd });
@@ -325,7 +325,7 @@ describe('permission rules for skills', () => {
 });
 
 describe('turn-long rules', () => {
-  const cwd = '/tmp/cairn-turn-rules';
+  const cwd = '/tmp/karst-turn-rules';
   const engine = (): PermissionEngine => new PermissionEngine({ mode: 'default', rules: [], workingDirs: [cwd], cwd: () => cwd });
   const bash = (e: PermissionEngine, command: string) => e.check('Bash', { kind: 'bash', command }).behavior;
 
@@ -684,7 +684,7 @@ describe('skills through the agent', () => {
     });
 
     it('expands the skill directory inside allowed-tools', async () => {
-      const dir = writeSkill(home, 'script', '---\nallowed-tools: Bash(${CAIRN_SKILL_DIR}/run.sh *)\n---\nx');
+      const dir = writeSkill(home, 'script', '---\nallowed-tools: Bash(${KARST_SKILL_DIR}/run.sh *)\n---\nx');
       const h = await harness([]);
       assert.deepEqual((await run(h.runtime, '/script')).activation!.allowedTools, [`Bash(${dir}/run.sh *)`]);
     });
@@ -759,7 +759,7 @@ describe('skills from the command line', () => {
     writeSkill(home, 'greet', 'Say hello to $0.');
     const result = spawnSync(process.execPath, [CLI, '-p', '/greet world', '--provider', 'scripted'], {
       cwd: dir,
-      env: { ...process.env, CAIRN_HOME: home, CAIRN_SCRIPT: script },
+      env: { ...process.env, KARST_HOME: home, KARST_SCRIPT: script },
       encoding: 'utf8',
       input: '',
       timeout: 30_000,
@@ -775,7 +775,7 @@ describe('skills from the command line', () => {
     writeSkill(home, 'needs-make', '!`make deploy`');
     const result = spawnSync(process.execPath, [CLI, '-p', '/needs-make', '--provider', 'scripted'], {
       cwd: dir,
-      env: { ...process.env, CAIRN_HOME: home, CAIRN_SCRIPT: script },
+      env: { ...process.env, KARST_HOME: home, KARST_SCRIPT: script },
       encoding: 'utf8',
       input: '',
       timeout: 30_000,
@@ -791,7 +791,7 @@ describe('skills from the command line', () => {
     writeFileSync(script, JSON.stringify([{ text: 'fine' }]));
     const result = spawnSync(process.execPath, [CLI, '-p', '/etc/hosts looks wrong', '--provider', 'scripted'], {
       cwd: dir,
-      env: { ...process.env, CAIRN_HOME: home, CAIRN_SCRIPT: script },
+      env: { ...process.env, KARST_HOME: home, KARST_SCRIPT: script },
       encoding: 'utf8',
       input: '',
       timeout: 30_000,

@@ -14,7 +14,7 @@ import { htmlToText, isPrivateAddress, webFetchTool } from '../src/tools/web.ts'
 import type { PermissionMode } from '../src/permissions/engine.ts';
 
 function setup(overrides: Partial<ToolContext> = {}): { dir: string; ctx: ToolContext } {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-tools-')));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'karst-tools-')));
   let cwd = dir;
   let mode: PermissionMode = 'default';
   const prompter: Prompter = {
@@ -33,7 +33,7 @@ function setup(overrides: Partial<ToolContext> = {}): { dir: string; ctx: ToolCo
     prompter,
     todos: { items: [] },
     tasks: new TaskRegistry({ logDir: join(dir, '.logs') }),
-    secretEnvVars: ['CAIRN_TEST_SECRET'],
+    secretEnvVars: ['KARST_TEST_SECRET'],
     isReadDenied: () => false,
     getMode: () => mode,
     setMode: (next) => {
@@ -159,21 +159,21 @@ describe('Bash', () => {
 
   it('hides credentials from the commands it runs, foreground and background', async () => {
     const { ctx } = setup();
-    process.env.CAIRN_TEST_SECRET = 'super-secret-value';
-    process.env.CAIRN_TEST_VISIBLE = 'ordinary';
+    process.env.KARST_TEST_SECRET = 'super-secret-value';
+    process.env.KARST_TEST_VISIBLE = 'ordinary';
     try {
       const output = (await bashTool.execute({ command: 'env' }, ctx)).content;
       assert.doesNotMatch(output, /super-secret-value/);
-      assert.match(output, /CAIRN_TEST_VISIBLE=ordinary/);
+      assert.match(output, /KARST_TEST_VISIBLE=ordinary/);
 
       await bashTool.execute({ command: 'env', run_in_background: true }, ctx);
       await new Promise((resolve) => setTimeout(resolve, 200));
       const log = readFileSync(ctx.tasks.list()[0]!.logPath, 'utf8');
-      assert.match(log, /CAIRN_TEST_VISIBLE=ordinary/);
+      assert.match(log, /KARST_TEST_VISIBLE=ordinary/);
       assert.doesNotMatch(log, /super-secret-value/);
     } finally {
-      delete process.env.CAIRN_TEST_SECRET;
-      delete process.env.CAIRN_TEST_VISIBLE;
+      delete process.env.KARST_TEST_SECRET;
+      delete process.env.KARST_TEST_VISIBLE;
     }
   });
 

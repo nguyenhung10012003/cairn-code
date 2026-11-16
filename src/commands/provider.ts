@@ -36,7 +36,7 @@ async function ensureKey(name: string, config: ProviderConfig, io: CommandIO, ou
   const missing = source.kind === 'stored-elsewhere' || (source.kind === 'none' && !source.optional);
   if (!missing) return true;
   if (!io.ask) {
-    out.push(`"${name}" has no API key. Save one with: cairn provider key ${name}`);
+    out.push(`"${name}" has no API key. Save one with: karst provider key ${name}`);
     return false;
   }
   const type = providerTypeName(name, config)!;
@@ -92,7 +92,7 @@ async function switchTo(runtime: Runtime, name: string, model: string | undefine
 }
 
 async function addFlow(runtime: Runtime, io: CommandIO, presetName: string | undefined): Promise<CommandResult> {
-  if (!io.pick || !io.ask) return { output: 'Adding a provider needs the interactive session. From a shell: cairn provider add <name> --type <type> --base-url <url>' };
+  if (!io.pick || !io.ask) return { output: 'Adding a provider needs the interactive session. From a shell: karst provider add <name> --type <type> --base-url <url>' };
   const type = await io.pick(
     'What does the provider speak?',
     ADDABLE_TYPES.map((value) => ({ value, label: value, detail: PROVIDER_TYPES[value]!.description })),
@@ -136,7 +136,7 @@ async function keyFlow(runtime: Runtime, name: string, io: CommandIO): Promise<C
   const config = runtime.providerConfigs()[name] ?? {};
   const type = providerTypeName(name, runtime.providerConfigs()[name]);
   if (!type || type === 'scripted') return { output: `Unknown provider "${name}".` };
-  if (!io.ask) return { output: `Save a key from a shell with: cairn provider key ${name}` };
+  if (!io.ask) return { output: `Save a key from a shell with: karst provider key ${name}` };
   const out: string[] = [];
   const warning = keyWarning(config, type);
   if (warning) out.push(`Warning: ${warning}`);

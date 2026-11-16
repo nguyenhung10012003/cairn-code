@@ -1,5 +1,5 @@
 /**
- * Checks Cairn against the real API, which the local tests cannot do. It spends real money, a
+ * Checks Karst against the real API, which the local tests cannot do. It spends real money, a
  * few cents at most, so it only runs when asked: ANTHROPIC_API_KEY=... npm run test:live
  *
  * Each check prints what it found, so a failure shows which assumption about the API was wrong.
@@ -17,8 +17,8 @@ if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
   process.exit(2);
 }
 
-process.env.CAIRN_HOME = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-live-home-')));
-const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-live-')));
+process.env.KARST_HOME = realpathSync(mkdtempSync(join(tmpdir(), 'karst-live-home-')));
+const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'karst-live-')));
 const secretWord = `word-${Date.now()}`;
 writeFileSync(join(cwd, 'note.txt'), `The secret word is ${secretWord}.\n`);
 
@@ -57,7 +57,7 @@ console.log('   reply:', lastText(cacheTurn).slice(0, 60));
 
 console.log('3. Resuming sends a history and system prompt the API still accepts');
 const sessionId = first.agent.sessionId;
-writeFileSync(join(cwd, 'CAIRN.md'), 'This file would change a rebuilt system prompt.');
+writeFileSync(join(cwd, 'KARST.md'), 'This file would change a rebuilt system prompt.');
 const resumed = await createRuntime({ cwd, prompter, resume: sessionId, effort: 'low' });
 const resumeTurn = await turn(resumed, 'What was the secret word? Reply with just the word.');
 assert.match(lastText(resumeTurn), new RegExp(secretWord));

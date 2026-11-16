@@ -1,6 +1,6 @@
 /**
  * Newer versions. Each interactive session asks npm for the latest version as it starts and says
- * when there is one. `cairn update` installs it, with the package manager Cairn was installed
+ * when there is one. `karst update` installs it, with the package manager Karst was installed
  * with. With `autoUpdates` in the user settings, the session installs it in the background.
  */
 import { spawn } from 'node:child_process';
@@ -17,7 +17,7 @@ export const UPDATE_HELP = `Usage: ${APP_NAME} update
 
 Installs the latest version of ${APP_DISPLAY_NAME} from npm, with the package manager it was installed with.
 
-Each interactive session also checks for a newer version as it starts. In ~/.cairn/settings.json,
+Each interactive session also checks for a newer version as it starts. In ~/.karst/settings.json,
 "updateCheck": false turns that off, and "autoUpdates": true installs a newer version in the
 background instead of only saying there is one. The check is skipped when CI is set.
 `;
@@ -78,7 +78,7 @@ export async function latestVersion(timeoutMs = CHECK_TIMEOUT_MS, signal?: Abort
 export type Installation =
   /** Installed globally by a package manager, which `install` reinstalls at another version. */
   | { kind: 'global'; manager: string; packageDir: string; install: (version: string) => string[] }
-  /** Anything Cairn cannot update by itself, with what to do instead. */
+  /** Anything Karst cannot update by itself, with what to do instead. */
   | { kind: 'other'; advice: string };
 
 function run(command: string, args: string[]): Promise<{ code: number | null; stdout: string }> {
@@ -100,7 +100,7 @@ function realPath(path: string): string {
 }
 
 /**
- * How this copy of Cairn was installed, from where its code runs. `entry` is for tests. In the
+ * How this copy of Karst was installed, from where its code runs. `entry` is for tests. In the
  * npm package everything is one file, so this module's own path is the package's.
  */
 export async function detectInstallation(entry = fileURLToPath(import.meta.url)): Promise<Installation> {
@@ -219,7 +219,7 @@ export async function checkForUpdate(options: UpdateCheckOptions): Promise<void>
   installInBackground(installation, latest, options.report);
 }
 
-/** `cairn update`. */
+/** `karst update`. */
 export async function runUpdateCommand(argv: string[]): Promise<number> {
   if (argv.includes('--help') || argv.includes('-h')) {
     process.stdout.write(UPDATE_HELP);

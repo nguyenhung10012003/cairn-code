@@ -106,14 +106,14 @@ describe('at run time', () => {
   let previousHome: string | undefined;
 
   beforeEach(() => {
-    dir = tempDir('cairn-prompt-');
-    previousHome = process.env.CAIRN_HOME;
-    process.env.CAIRN_HOME = tempDir('cairn-prompt-home-');
+    dir = tempDir('karst-prompt-');
+    previousHome = process.env.KARST_HOME;
+    process.env.KARST_HOME = tempDir('karst-prompt-home-');
   });
 
   afterEach(() => {
-    if (previousHome === undefined) delete process.env.CAIRN_HOME;
-    else process.env.CAIRN_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.KARST_HOME;
+    else process.env.KARST_HOME = previousHome;
   });
 
   const start = async (turns: ScriptedTurn[], extra: Partial<RuntimeOptions> = {}): Promise<{ runtime: Runtime; provider: ScriptedProvider }> => {
@@ -125,7 +125,7 @@ describe('at run time', () => {
   const agentFile = (front: string): string => `---\n${front}\n---\nDo the review.`;
 
   it('tells the model which custom subagent types exist', async () => {
-    write(dir, '.cairn/agents/reviewer.md', agentFile('description: Reviews diffs'));
+    write(dir, '.karst/agents/reviewer.md', agentFile('description: Reviews diffs'));
     const { runtime, provider } = await start([{ text: 'ok' }]);
     await turn(runtime, 'hello');
     assert.match(provider.requests[0]!.system.map((block) => block.text).join('\n'), /## Agents[\s\S]*- reviewer: Reviews diffs/);
@@ -140,7 +140,7 @@ describe('at run time', () => {
   });
 
   it('says nothing about subagent types when the Agent tool is off', async () => {
-    write(dir, '.cairn/agents/reviewer.md', agentFile('description: Reviews diffs'));
+    write(dir, '.karst/agents/reviewer.md', agentFile('description: Reviews diffs'));
     const { runtime, provider } = await start([{ text: 'ok' }], { tools: ['Read'] });
     await turn(runtime, 'hello');
     assert.doesNotMatch(JSON.stringify(provider.requests[0]!.system), /Reviews diffs/);
@@ -148,7 +148,7 @@ describe('at run time', () => {
   });
 
   it('gives a subagent the model it runs on', async () => {
-    write(dir, '.cairn/agents/reviewer.md', agentFile('description: Reviews diffs\nmodel: claude-sonnet-5-5'));
+    write(dir, '.karst/agents/reviewer.md', agentFile('description: Reviews diffs\nmodel: claude-sonnet-5-5'));
     const { runtime, provider } = await start([
       { toolCalls: [{ name: 'Agent', input: { description: 'review', prompt: 'look', subagent_type: 'reviewer' } }] },
       { text: 'report' },

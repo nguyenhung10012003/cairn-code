@@ -102,11 +102,11 @@ export interface ProviderConfig {
   maxOutputTokens?: number;
 }
 
-/** What a provider is built from: its settings, plus what Cairn adds when it creates one. */
+/** What a provider is built from: its settings, plus what Karst adds when it creates one. */
 export interface ProviderInit extends ProviderConfig {
   /** The name it was configured under, shown to the user. Defaults to its type. */
   name?: string;
-  /** A key saved with `cairn provider key`. A key in the environment takes precedence. */
+  /** A key saved with `karst provider key`. A key in the environment takes precedence. */
   storedKey?: string;
 }
 

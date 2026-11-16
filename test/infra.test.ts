@@ -21,12 +21,12 @@ import { sanitize } from '../src/ui/render.ts';
 
 let home: string;
 beforeAll(() => {
-  home = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-home-')));
-  process.env.CAIRN_HOME = home;
+  home = realpathSync(mkdtempSync(join(tmpdir(), 'karst-home-')));
+  process.env.KARST_HOME = home;
 });
 
 function project(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), 'cairn-infra-')));
+  return realpathSync(mkdtempSync(join(tmpdir(), 'karst-infra-')));
 }
 
 const prompter: Prompter = {
@@ -37,8 +37,8 @@ const prompter: Prompter = {
 const noChoice = { choose: async () => null };
 
 function writeProjectSettings(dir: string, settings: unknown, file = 'settings.json'): void {
-  mkdirSync(join(dir, '.cairn'), { recursive: true });
-  writeFileSync(join(dir, '.cairn', file), JSON.stringify(settings));
+  mkdirSync(join(dir, '.karst'), { recursive: true });
+  writeFileSync(join(dir, '.karst', file), JSON.stringify(settings));
 }
 
 describe('sessions', () => {
@@ -283,7 +283,7 @@ describe('settings and trust', () => {
 
   it('asks for trust when a project ships custom agents', () => {
     const dir = project();
-    mkdirSync(join(dir, '.cairn/agents'), { recursive: true });
+    mkdirSync(join(dir, '.karst/agents'), { recursive: true });
     assert.equal(loadSettings({ cwd: dir, trusted: false }).needsTrust, true);
     assert.equal(loadSettings({ cwd: dir, trusted: true }).needsTrust, false);
   });
@@ -305,8 +305,8 @@ describe('settings and trust', () => {
 
   it('warns about broken settings rather than failing', () => {
     const dir = project();
-    mkdirSync(join(dir, '.cairn'));
-    writeFileSync(join(dir, '.cairn/settings.json'), '{ not json');
+    mkdirSync(join(dir, '.karst'));
+    writeFileSync(join(dir, '.karst/settings.json'), '{ not json');
     assert.match(loadSettings({ cwd: dir, trusted: true }).warnings[0]!, /ignoring it/);
   });
 
@@ -321,7 +321,7 @@ describe('settings and trust', () => {
     appendLocalAllowRule(dir, 'Bash(x)');
     appendLocalAllowRule(dir, 'Bash(x)');
     const path = workspaceSettingsPath(dir);
-    assert.equal(existsSync(join(dir, '.cairn')), false);
+    assert.equal(existsSync(join(dir, '.karst')), false);
     assert.deepEqual((JSON.parse(readFileSync(path, 'utf8')) as { permissions: { allow: string[] } }).permissions.allow, ['Bash(x)']);
     assert.equal(statSync(path).mode & 0o777, 0o600);
   });
@@ -331,15 +331,15 @@ describe('instructions', () => {
   it('loads from the root down, so closer instructions come last', () => {
     const dir = project();
     mkdirSync(join(dir, 'a/b'), { recursive: true });
-    writeFileSync(join(dir, 'CAIRN.md'), 'top');
-    writeFileSync(join(dir, 'a/CAIRN.md'), 'middle');
-    writeFileSync(join(dir, 'a/b/CAIRN.md'), 'bottom');
-    writeFileSync(join(dir, 'a/b/CAIRN.local.md'), 'personal');
+    writeFileSync(join(dir, 'KARST.md'), 'top');
+    writeFileSync(join(dir, 'a/KARST.md'), 'middle');
+    writeFileSync(join(dir, 'a/b/KARST.md'), 'bottom');
+    writeFileSync(join(dir, 'a/b/KARST.local.md'), 'personal');
     const contents = loadInstructions(join(dir, 'a/b'), false).files.map((f) => f.content).filter((c) => ['top', 'middle', 'bottom', 'personal'].includes(c));
     assert.deepEqual(contents, ['top', 'middle', 'bottom', 'personal']);
   });
 
-  it('falls back to AGENTS.md, then CLAUDE.md, in a directory with no CAIRN.md', () => {
+  it('falls back to AGENTS.md, then CLAUDE.md, in a directory with no KARST.md', () => {
     const dir = project();
     writeFileSync(join(dir, 'CLAUDE.md'), 'from claude');
     assert.ok(loadInstructions(dir, false).files.some((f) => f.content === 'from claude'));
@@ -351,7 +351,7 @@ describe('instructions', () => {
 
   it('follows imports relative to the importing file, up to the depth limit', () => {
     const dir = project();
-    writeFileSync(join(dir, 'CAIRN.md'), 'See @f1');
+    writeFileSync(join(dir, 'KARST.md'), 'See @f1');
     for (let i = 1; i <= 6; i++) writeFileSync(join(dir, `f${i}`), `level ${i} @f${i + 1}`);
     const { files, warnings } = loadInstructions(dir, false);
     const loaded = files.map((f) => f.content);
@@ -362,15 +362,15 @@ describe('instructions', () => {
 
   it('survives an import cycle', () => {
     const dir = project();
-    writeFileSync(join(dir, 'CAIRN.md'), '@other');
-    writeFileSync(join(dir, 'other'), '@CAIRN.md');
+    writeFileSync(join(dir, 'KARST.md'), '@other');
+    writeFileSync(join(dir, 'other'), '@KARST.md');
     assert.equal(loadInstructions(dir, false).files.length, 2);
   });
 
   it('does not treat code as an import', () => {
     const dir = project();
     writeFileSync(join(dir, 'x'), 'imported');
-    writeFileSync(join(dir, 'CAIRN.md'), 'Use `@x` here.\n```\n@x\n```\nor user@x');
+    writeFileSync(join(dir, 'KARST.md'), 'Use `@x` here.\n```\n@x\n```\nor user@x');
     assert.equal(loadInstructions(dir, false).files.length, 1);
   });
 
@@ -379,7 +379,7 @@ describe('instructions', () => {
     const outside = project();
     const secret = join(outside, 'secret.md');
     writeFileSync(secret, 'outside content');
-    writeFileSync(join(dir, 'CAIRN.md'), `@${secret}`);
+    writeFileSync(join(dir, 'KARST.md'), `@${secret}`);
     const untrusted = loadInstructions(dir, false);
     assert.ok(!untrusted.files.some((f) => f.content === 'outside content'));
     assert.ok(untrusted.warnings.some((w) => w.includes('outside the project')));
@@ -388,8 +388,8 @@ describe('instructions', () => {
 
   it('strips maintainer comments but keeps those in code blocks', () => {
     const dir = project();
-    writeFileSync(join(dir, 'CAIRN.md'), 'keep\n<!-- hidden -->\n<!--\nalso hidden\n-->\n```\n<!-- shown -->\n```');
-    const content = loadInstructions(dir, false).files.find((f) => f.path.endsWith('CAIRN.md'))!.content;
+    writeFileSync(join(dir, 'KARST.md'), 'keep\n<!-- hidden -->\n<!--\nalso hidden\n-->\n```\n<!-- shown -->\n```');
+    const content = loadInstructions(dir, false).files.find((f) => f.path.endsWith('KARST.md'))!.content;
     assert.doesNotMatch(content, /hidden/);
     assert.match(content, /shown/);
   });
@@ -450,7 +450,7 @@ describe('hook runner', () => {
   });
 
   it('exposes the project directory, and does nothing with no hooks configured', async () => {
-    const result = await new HookRunner({ SessionStart: [{ hooks: [{ type: 'command', command: 'echo $CAIRN_PROJECT_DIR' }] }] }, '/some/dir').run('SessionStart', common);
+    const result = await new HookRunner({ SessionStart: [{ hooks: [{ type: 'command', command: 'echo $KARST_PROJECT_DIR' }] }] }, '/some/dir').run('SessionStart', common);
     assert.deepEqual(result.additionalContext, ['/some/dir']);
     assert.deepEqual((await new HookRunner({}, tmpdir()).run('Stop', common)).notices, []);
   });
@@ -526,9 +526,9 @@ describe('slash commands', () => {
 
   it('expands custom commands with $ARGUMENTS and lists them', async () => {
     const dir = project();
-    mkdirSync(join(dir, '.cairn/commands'), { recursive: true });
-    writeFileSync(join(dir, '.cairn/commands/review.md'), '---\ndescription: Review a thing\n---\nReview $ARGUMENTS carefully.');
-    writeFileSync(join(dir, '.cairn/commands/plain.md'), 'Do the plain thing.');
+    mkdirSync(join(dir, '.karst/commands'), { recursive: true });
+    writeFileSync(join(dir, '.karst/commands/review.md'), '---\ndescription: Review a thing\n---\nReview $ARGUMENTS carefully.');
+    writeFileSync(join(dir, '.karst/commands/plain.md'), 'Do the plain thing.');
     const runtime = await createRuntime({ cwd: dir, prompter, provider: new ScriptedProvider([]), trust: true });
     const run = async (line: string) => settleCommand(await runSlashCommand(line, runtime, noChoice), new AbortController().signal);
     assert.match((await run('/review src/a.ts')).prompt!, /Review src\/a\.ts carefully\.$/);
@@ -539,8 +539,8 @@ describe('slash commands', () => {
 
   it('ignores an untrusted project\'s custom commands', async () => {
     const dir = project();
-    mkdirSync(join(dir, '.cairn/commands'), { recursive: true });
-    writeFileSync(join(dir, '.cairn/commands/review.md'), 'Review it.');
+    mkdirSync(join(dir, '.karst/commands'), { recursive: true });
+    writeFileSync(join(dir, '.karst/commands/review.md'), 'Review it.');
     const runtime = await runtimeWith([], dir);
     assert.match((await runSlashCommand('/review', runtime, noChoice)).output!, /Unknown command/);
   });
@@ -572,8 +572,8 @@ describe('agent definitions', () => {
 
   it('loads custom agents, and project ones only when trusted', () => {
     const dir = project();
-    mkdirSync(join(dir, '.cairn/agents'), { recursive: true });
-    writeFileSync(join(dir, '.cairn/agents/rev.md'), '---\ndescription: Reviews\ntools: Read, Grep\nmodel: small\n---\nYou review.');
+    mkdirSync(join(dir, '.karst/agents'), { recursive: true });
+    writeFileSync(join(dir, '.karst/agents/rev.md'), '---\ndescription: Reviews\ntools: Read, Grep\nmodel: small\n---\nYou review.');
     assert.ok(!loadAgentDefinitions(dir, false).some((a) => a.name === 'rev'));
     const rev = loadAgentDefinitions(dir, true).find((a) => a.name === 'rev')!;
     assert.deepEqual(rev.tools, ['Read', 'Grep']);
@@ -591,6 +591,6 @@ describe('terminal output safety', () => {
   });
 
   it('confirms home is isolated for these tests', () => {
-    assert.equal(process.env.CAIRN_HOME, home);
+    assert.equal(process.env.KARST_HOME, home);
   });
 });

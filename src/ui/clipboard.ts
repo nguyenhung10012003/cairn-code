@@ -33,7 +33,7 @@ const MAC_TYPES: { listed: string; as: string; extension: string; convert?: bool
 /**
  * Lists the files copied in Explorer, one `file <base64 of the UTF-8 path>` line each, so a name
  * survives whatever code page the console has. Then saves the clipboard's picture as a PNG to the
- * file CAIRN_CLIPBOARD_OUT names and says `image`. Errors go to stderr as plain text, since
+ * file KARST_CLIPBOARD_OUT names and says `image`. Errors go to stderr as plain text, since
  * PowerShell would otherwise write them there as CLIXML.
  */
 const WINDOWS_SCRIPT = [
@@ -48,7 +48,7 @@ const WINDOWS_SCRIPT = [
   '  }',
   '  if ([System.Windows.Forms.Clipboard]::ContainsImage()) {',
   '    $image = [System.Windows.Forms.Clipboard]::GetImage()',
-  '    try { $image.Save($env:CAIRN_CLIPBOARD_OUT, [System.Drawing.Imaging.ImageFormat]::Png) } finally { $image.Dispose() }',
+  '    try { $image.Save($env:KARST_CLIPBOARD_OUT, [System.Drawing.Imaging.ImageFormat]::Png) } finally { $image.Dispose() }',
   "    'image'",
   '  }',
   '} catch {',
@@ -112,7 +112,7 @@ function imageFile(path: string): string | null {
 }
 
 async function scratchFile(extension: string): Promise<{ path: string; cleanup: () => Promise<void> }> {
-  const dir = await mkdtemp(join(tmpdir(), 'cairn-clipboard-'));
+  const dir = await mkdtemp(join(tmpdir(), 'karst-clipboard-'));
   return { path: join(dir, `clipboard.${extension}`), cleanup: () => rm(dir, { recursive: true, force: true }) };
 }
 
@@ -224,7 +224,7 @@ async function windowsClipboard(env: NodeJS.ProcessEnv): Promise<ClipboardImage>
   const raw = await scratchFile('png');
   // An encoded script needs no quoting, and the file name goes in the environment for the same reason.
   const script = Buffer.from(WINDOWS_SCRIPT, 'utf16le').toString('base64');
-  const result = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', script], { ...env, CAIRN_CLIPBOARD_OUT: raw.path });
+  const result = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', script], { ...env, KARST_CLIPBOARD_OUT: raw.path });
   if (result.missing || result.code !== 0) {
     await raw.cleanup();
     if (result.missing) return failed('Pasting an image needs PowerShell (powershell.exe), which comes with Windows.');

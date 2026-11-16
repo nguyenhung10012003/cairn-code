@@ -15,7 +15,7 @@ export class ProviderNotConfiguredError extends Error {
 
 export const DEFAULT_PROVIDER = 'anthropic';
 
-/** An API Cairn can speak. A provider is one of these, under its own name or another. */
+/** An API Karst can speak. A provider is one of these, under its own name or another. */
 export interface ProviderType {
   description: string;
   create(init: ProviderInit): ModelProvider;
@@ -68,12 +68,12 @@ export const PROVIDER_TYPES: Record<string, ProviderType> = {
   scripted: {
     description: 'Mock replies from a script, without an API',
     create: () => {
-      const script = process.env.CAIRN_SCRIPT;
+      const script = process.env.KARST_SCRIPT;
       if (!script) return ScriptedProvider.demo();
       try {
         return ScriptedProvider.fromFile(script);
       } catch (error) {
-        throw new ProviderNotConfiguredError(`CAIRN_SCRIPT ${script}: ${(error as Error).message}`);
+        throw new ProviderNotConfiguredError(`KARST_SCRIPT ${script}: ${(error as Error).message}`);
       }
     },
     endpoint: () => 'scripted',
@@ -164,7 +164,7 @@ export function createProvider(name: string = DEFAULT_PROVIDER, config: Provider
     throw new ProviderNotConfiguredError(`Unknown provider "${name}".${hint} Available: ${providerNames({}).join(', ')}.`);
   }
   const type = PROVIDER_TYPES[typeName]!;
-  if (type.needsBaseUrl && !config.baseUrl) throw new ProviderNotConfiguredError(`The provider "${name}" needs a base URL. Set it with: cairn provider add ${name} --base-url <url>`);
+  if (type.needsBaseUrl && !config.baseUrl) throw new ProviderNotConfiguredError(`The provider "${name}" needs a base URL. Set it with: karst provider add ${name} --base-url <url>`);
   // Only these fields come from settings; a key never does.
   const { type: _type, model, baseUrl, apiKeyEnv, fullApiFeatures, maxRetries, contextWindow, maxOutputTokens } = config;
   const init: ProviderInit = {
@@ -181,7 +181,7 @@ export function createProvider(name: string = DEFAULT_PROVIDER, config: Provider
   if (source.kind === 'stored') init.storedKey = storedKey(name)!.apiKey;
   if (source.kind === 'stored-elsewhere') {
     notes?.push(
-      `The key saved for "${name}" was for ${source.endpoint}, but "${name}" now sends requests to ${type.endpoint(config)}, so the key is not sent. Save one for the new address with: cairn provider key ${name}`,
+      `The key saved for "${name}" was for ${source.endpoint}, but "${name}" now sends requests to ${type.endpoint(config)}, so the key is not sent. Save one for the new address with: karst provider key ${name}`,
     );
   }
   return type.create(init);

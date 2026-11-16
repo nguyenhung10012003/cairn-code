@@ -109,7 +109,7 @@ function expandValue(value: string, ctx: ExpandContext): string {
       ctx.warnings.push(`MCP server "${ctx.serverName}": \${${name}} reads as empty, so that credential is not sent to a remote server. Copy it into a variable of your own to pass it.`);
       return '';
     }
-    const actual = name === 'CAIRN_PROJECT_DIR' ? ctx.projectDir : process.env[name];
+    const actual = name === 'KARST_PROJECT_DIR' ? ctx.projectDir : process.env[name];
     if (actual !== undefined) return actual;
     if (fallback !== undefined) return fallback;
     ctx.warnings.push(`MCP server "${ctx.serverName}": \${${name}} is not set.`);

@@ -1,4 +1,4 @@
-/** Adding, listing and removing providers, saving keys and choosing the default. Used by `cairn provider` and /provider. */
+/** Adding, listing and removing providers, saving keys and choosing the default. Used by `karst provider` and /provider. */
 import { existsSync } from 'node:fs';
 import { deleteKey, saveKey } from '../config/credentials.ts';
 import { userSettingsPath } from '../config/paths.ts';

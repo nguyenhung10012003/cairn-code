@@ -52,14 +52,14 @@ describe('rules', () => {
   let dir: string;
   let home: string;
   beforeEach(() => {
-    dir = tempDir('cairn-rules-');
-    home = tempDir('cairn-ruleshome-');
-    process.env.CAIRN_HOME = home;
+    dir = tempDir('karst-rules-');
+    home = tempDir('karst-ruleshome-');
+    process.env.KARST_HOME = home;
   });
 
   it('loads a rule without paths at startup, from nested folders too, and strips its frontmatter', () => {
-    write(dir, '.cairn/rules/style.md', '---\nunrelated: true\n---\nUse tabs.');
-    write(dir, '.cairn/rules/backend/api.md', 'Validate input.');
+    write(dir, '.karst/rules/style.md', '---\nunrelated: true\n---\nUse tabs.');
+    write(dir, '.karst/rules/backend/api.md', 'Validate input.');
     write(home, 'rules/mine.md', 'Be brief.');
     const loaded = loadInstructions(dir, false);
     const text = loaded.files.map((file) => file.content).join('\n');
@@ -71,14 +71,14 @@ describe('rules', () => {
   });
 
   it('treats a rule with broken YAML as applying everywhere, and says so', () => {
-    write(dir, '.cairn/rules/bad.md', '---\npaths: [unclosed\n---\nStill applies.');
+    write(dir, '.karst/rules/bad.md', '---\npaths: [unclosed\n---\nStill applies.');
     const loaded = loadInstructions(dir, false);
     assert.match(loaded.files.map((file) => file.content).join('\n'), /Still applies\./);
     assert.ok(loaded.warnings.some((warning) => warning.includes('not valid YAML')));
   });
 
   it('holds back a path-scoped rule until a matching file is read, and attaches it once', async () => {
-    write(dir, '.cairn/rules/api.md', '---\npaths:\n  - "src/api/**/*.ts"\n---\nAPI RULE');
+    write(dir, '.karst/rules/api.md', '---\npaths:\n  - "src/api/**/*.ts"\n---\nAPI RULE');
     const handler = write(dir, 'src/api/h.ts', 'x');
     const other = write(dir, 'README.md', 'x');
     const { runtime, provider } = await start(dir, [read(other), read(handler), read(handler), { text: 'done' }]);
@@ -92,7 +92,7 @@ describe('rules', () => {
   });
 
   it('keeps tool results first in the message that carries a rule, as the API requires', async () => {
-    write(dir, '.cairn/rules/api.md', '---\npaths: "**/*.ts"\n---\nTS RULE');
+    write(dir, '.karst/rules/api.md', '---\npaths: "**/*.ts"\n---\nTS RULE');
     const file = write(dir, 'a.ts', 'x');
     const { runtime, provider } = await start(dir, [read(file), { text: 'done' }]);
     await turn(runtime, 'go');
@@ -103,7 +103,7 @@ describe('rules', () => {
   });
 
   it('accepts a comma-separated string with a brace group in it', async () => {
-    write(dir, '.cairn/rules/web.md', '---\npaths: "web/*.{ts,tsx}, lib/*.ts"\n---\nWEB RULE');
+    write(dir, '.karst/rules/web.md', '---\npaths: "web/*.{ts,tsx}, lib/*.ts"\n---\nWEB RULE');
     const file = write(dir, 'web/a.tsx', 'x');
     const { runtime, provider } = await start(dir, [read(file), { text: 'done' }]);
     await turn(runtime, 'go');
@@ -112,7 +112,7 @@ describe('rules', () => {
   });
 
   it('applies a rule again after compaction, since the summary dropped it', async () => {
-    write(dir, '.cairn/rules/api.md', '---\npaths: "*.ts"\n---\nTS RULE');
+    write(dir, '.karst/rules/api.md', '---\npaths: "*.ts"\n---\nTS RULE');
     const file = write(dir, 'a.ts', 'x');
     const { runtime, provider } = await start(dir, [read(file), { text: 'one' }, { text: 'summary' }, read(file), { text: 'two' }]);
     await turn(runtime, 'first');
@@ -127,14 +127,14 @@ describe('rules', () => {
 describe('instructions in subdirectories', () => {
   let dir: string;
   beforeEach(() => {
-    dir = tempDir('cairn-nested-');
-    process.env.CAIRN_HOME = tempDir('cairn-nestedhome-');
+    dir = tempDir('karst-nested-');
+    process.env.KARST_HOME = tempDir('karst-nestedhome-');
   });
 
   it('are not read at startup, and join when the model reaches a file there', async () => {
-    write(dir, 'CAIRN.md', 'ROOT NOTES');
-    write(dir, 'pkg/CAIRN.md', 'PKG NOTES');
-    write(dir, 'pkg/deep/.cairn/rules/r.md', 'DEEP RULE');
+    write(dir, 'KARST.md', 'ROOT NOTES');
+    write(dir, 'pkg/KARST.md', 'PKG NOTES');
+    write(dir, 'pkg/deep/.karst/rules/r.md', 'DEEP RULE');
     const file = write(dir, 'pkg/deep/a.txt', 'x');
     const { runtime, provider } = await start(dir, [read(file), { text: 'done' }]);
     await turn(runtime, 'go');
@@ -148,8 +148,8 @@ describe('instructions in subdirectories', () => {
   });
 
   it('does not attach anything for a file outside the project', async () => {
-    const outside = tempDir('cairn-outside-');
-    write(outside, 'CAIRN.md', 'OUTSIDE NOTES');
+    const outside = tempDir('karst-outside-');
+    write(outside, 'KARST.md', 'OUTSIDE NOTES');
     const file = write(outside, 'a.txt', 'x');
     const { runtime, provider } = await start(dir, [read(file), { text: 'done' }]);
     await turn(runtime, 'go');
@@ -158,7 +158,7 @@ describe('instructions in subdirectories', () => {
   });
 
   it('gives a subagent its own view: a rule it triggers does not leak to the parent', async () => {
-    write(dir, '.cairn/rules/api.md', '---\npaths: "*.ts"\n---\nTS RULE');
+    write(dir, '.karst/rules/api.md', '---\npaths: "*.ts"\n---\nTS RULE');
     const file = write(dir, 'a.ts', 'x');
     const { runtime, provider } = await start(dir, [
       { toolCalls: [{ name: 'Agent', input: { description: 'look', prompt: 'read it' } }] },
@@ -177,15 +177,15 @@ describe('where skills come from', () => {
   let dir: string;
   let home: string;
   beforeEach(() => {
-    dir = tempDir('cairn-skillsrc-');
-    home = tempDir('cairn-skillsrchome-');
-    process.env.CAIRN_HOME = home;
+    dir = tempDir('karst-skillsrc-');
+    home = tempDir('karst-skillsrchome-');
+    process.env.KARST_HOME = home;
   });
 
   const skill = (body: string, front = 'description: A skill'): string => `---\n${front}\n---\n${body}`;
 
   it('leaves a path-scoped skill out of the listing until a matching file is touched', async () => {
-    write(dir, '.cairn/skills/sql/SKILL.md', skill('SQL BODY', 'description: Writes SQL\npaths: "**/*.sql"'));
+    write(dir, '.karst/skills/sql/SKILL.md', skill('SQL BODY', 'description: Writes SQL\npaths: "**/*.sql"'));
     const file = write(dir, 'db/q.sql', 'select 1');
     const other = write(dir, 'a.txt', 'x');
     const { runtime, provider } = await start(dir, [read(other), { text: 'one' }, read(file), { text: 'two' }, { text: 'three' }]);
@@ -201,34 +201,34 @@ describe('where skills come from', () => {
   it('tells the model about a skill written during the session', async () => {
     const { runtime, provider } = await start(dir, [{ text: 'one' }, { text: 'two' }]);
     await turn(runtime, 'first');
-    write(dir, '.cairn/skills/fresh/SKILL.md', skill('x', 'description: Brand new'));
+    write(dir, '.karst/skills/fresh/SKILL.md', skill('x', 'description: Brand new'));
     await turn(runtime, 'second');
     assert.match(lastUserText(provider), /now available[\s\S]*Brand new/);
     await runtime.shutdown();
   });
 
   it('finds skills in parent directories up to the repository root, and no further', () => {
-    const root = tempDir('cairn-repo-');
+    const root = tempDir('karst-repo-');
     mkdirSync(join(root, '.git'));
-    write(root, '.cairn/skills/shared/SKILL.md', skill('x'));
+    write(root, '.karst/skills/shared/SKILL.md', skill('x'));
     const sub = join(root, 'apps/web');
     mkdirSync(sub, { recursive: true });
-    write(sub, '.cairn/skills/local/SKILL.md', skill('x'));
+    write(sub, '.karst/skills/local/SKILL.md', skill('x'));
     const names = [...loadSkills(sub, true).skills.keys()];
     assert.ok(names.includes('shared'));
     assert.ok(names.includes('local'));
-    const noRepo = tempDir('cairn-norepo-');
-    write(noRepo, '.cairn/skills/parent/SKILL.md', skill('x'));
+    const noRepo = tempDir('karst-norepo-');
+    write(noRepo, '.karst/skills/parent/SKILL.md', skill('x'));
     const child = join(noRepo, 'child');
     mkdirSync(child);
     assert.ok(!loadSkills(child, true).skills.has('parent'));
   });
 
   it('loads an added directory, under a prefix when the name is taken, and only when trusted', () => {
-    const other = tempDir('cairn-other-');
-    write(dir, '.cairn/skills/verify/SKILL.md', skill('mine'));
-    write(other, '.cairn/skills/verify/SKILL.md', skill('theirs'));
-    write(other, '.cairn/skills/unique/SKILL.md', skill('x'));
+    const other = tempDir('karst-other-');
+    write(dir, '.karst/skills/verify/SKILL.md', skill('mine'));
+    write(other, '.karst/skills/verify/SKILL.md', skill('theirs'));
+    write(other, '.karst/skills/unique/SKILL.md', skill('x'));
     const loaded = loadSkills(dir, true, { addDirs: [other] }).skills;
     assert.match(loaded.get('verify')!.body, /mine/);
     assert.ok(loaded.has(`${other.split('/').at(-1)}:verify`));
@@ -237,7 +237,7 @@ describe('where skills come from', () => {
   });
 
   it('adds a nested skill once the model reaches its directory', async () => {
-    write(dir, 'apps/web/.cairn/skills/deploy/SKILL.md', skill('x', 'description: Deploys the web app'));
+    write(dir, 'apps/web/.karst/skills/deploy/SKILL.md', skill('x', 'description: Deploys the web app'));
     const file = write(dir, 'apps/web/a.txt', 'x');
     const { runtime, provider } = await start(dir, [read(file), { text: 'one' }, { text: 'two' }]);
     await turn(runtime, 'first');
@@ -249,7 +249,7 @@ describe('where skills come from', () => {
 
   it("registers a skill's hooks when invoked, and treats a skill with hooks as privileged", async () => {
     const marker = join(dir, 'hook-ran');
-    write(dir, '.cairn/skills/hooked/SKILL.md', `---\ndescription: Hooked\nhooks:\n  PostToolUse:\n    - hooks:\n        - type: command\n          command: touch ${marker}\n---\nbody`);
+    write(dir, '.karst/skills/hooked/SKILL.md', `---\ndescription: Hooked\nhooks:\n  PostToolUse:\n    - hooks:\n        - type: command\n          command: touch ${marker}\n---\nbody`);
     const prompts: string[] = [];
     const file = write(dir, 'a.txt', 'x');
     const { runtime } = await start(dir, [{ toolCalls: [{ name: 'Skill', input: { skill: 'hooked' } }] }, read(file), { text: 'done' }], {
@@ -262,7 +262,7 @@ describe('where skills come from', () => {
   });
 
   it('runs no skills with --disable-slash-commands', async () => {
-    write(dir, '.cairn/skills/x/SKILL.md', skill('x'));
+    write(dir, '.karst/skills/x/SKILL.md', skill('x'));
     const { runtime, provider } = await start(dir, [{ text: 'ok' }], { disableSlashCommands: true });
     await turn(runtime, 'go');
     assert.ok(!provider.requests[0]!.tools.some((tool) => tool.name === 'Skill'));

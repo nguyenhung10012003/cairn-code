@@ -1,4 +1,4 @@
-/** The `cairn provider ...` subcommands. */
+/** The `karst provider ...` subcommands. */
 import { realpathSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { APP_NAME, credentialsPath } from '../config/paths.ts';

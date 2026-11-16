@@ -341,16 +341,16 @@ describe('through the agent loop', () => {
   let previousKey: string | undefined;
 
   beforeEach(() => {
-    dir = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-providers-')));
-    previousHome = process.env.CAIRN_HOME;
-    process.env.CAIRN_HOME = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-providers-home-')));
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'karst-providers-')));
+    previousHome = process.env.KARST_HOME;
+    process.env.KARST_HOME = realpathSync(mkdtempSync(join(tmpdir(), 'karst-providers-home-')));
     previousKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = 'sk-test-not-real';
   });
 
   afterEach(() => {
-    if (previousHome === undefined) delete process.env.CAIRN_HOME;
-    else process.env.CAIRN_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.KARST_HOME;
+    else process.env.KARST_HOME = previousHome;
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousKey;
   });

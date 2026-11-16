@@ -96,9 +96,9 @@ const MODEL_TIERS = new Set(['opus', 'sonnet', 'haiku', 'fable']);
 const UNATTENDED_BACKGROUND_LIMIT_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 20;
 
-/** How many subagents may run at once: `CAIRN_MAX_CONCURRENT_SUBAGENTS`, or 20. */
+/** How many subagents may run at once: `KARST_MAX_CONCURRENT_SUBAGENTS`, or 20. */
 function maxConcurrentSubagents(): number {
-  const set = Number(process.env.CAIRN_MAX_CONCURRENT_SUBAGENTS);
+  const set = Number(process.env.KARST_MAX_CONCURRENT_SUBAGENTS);
   return Number.isInteger(set) && set > 0 ? set : DEFAULT_MAX_CONCURRENT_SUBAGENTS;
 }
 const MAX_SUBAGENT_STOP_CONTINUATIONS = 3;
@@ -192,7 +192,7 @@ export interface Runtime {
   hooks: HookRunner;
   /** The provider in use now. /provider can change it. */
   readonly provider: ModelProvider;
-  /** The name it goes by, such as `anthropic` or one added with `cairn provider add`. */
+  /** The name it goes by, such as `anthropic` or one added with `karst provider add`. */
   readonly providerName: string;
   /** Provider settings by name, including ones added during this session. */
   providerConfigs(): Record<string, ProviderConfig>;
@@ -542,7 +542,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
   const memoryIndexPath = join(memoryDir, 'MEMORY.md');
   const memoryIndex = memoryEnabled && existsSync(memoryIndexPath) ? readFileSync(memoryIndexPath, 'utf8') : undefined;
-  const scratchpadDir = join(realpathSync(tmpdir()), `cairn-${process.getuid?.() ?? 'user'}`, projectDir.replace(/[^a-zA-Z0-9]/g, '-'), store.id, 'scratchpad');
+  const scratchpadDir = join(realpathSync(tmpdir()), `karst-${process.getuid?.() ?? 'user'}`, projectDir.replace(/[^a-zA-Z0-9]/g, '-'), store.id, 'scratchpad');
   mkdirSync(scratchpadDir, { recursive: true, mode: 0o700 });
   engine.addWorkingDir(scratchpadDir);
   engine.addRule(`Edit(/${canonicalize(scratchpadDir)}/**)`, 'allow', 'session');
@@ -1329,7 +1329,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       registry.stopAll();
       cron?.stopAll();
       tasks.stopAll();
-      // What has not exited yet gets KILL from it after a grace period, which Cairn, exiting, cannot send.
+      // What has not exited yet gets KILL from it after a grace period, which Karst, exiting, cannot send.
       reaper.close();
       await created.sandbox?.close();
       await mcp.close();

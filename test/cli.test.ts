@@ -11,18 +11,18 @@ const CLI = resolve(import.meta.dirname, '../src/cli.ts');
 
 function workspace(): { dir: string; home: string } {
   return {
-    dir: realpathSync(mkdtempSync(join(tmpdir(), 'cairn-cli-'))),
-    home: realpathSync(mkdtempSync(join(tmpdir(), 'cairn-clihome-'))),
+    dir: realpathSync(mkdtempSync(join(tmpdir(), 'karst-cli-'))),
+    home: realpathSync(mkdtempSync(join(tmpdir(), 'karst-clihome-'))),
   };
 }
 
 function run(args: string[], options: { dir: string; home: string; turns?: ScriptedTurn[]; input?: string }) {
-  const env: NodeJS.ProcessEnv = { ...process.env, CAIRN_HOME: options.home };
+  const env: NodeJS.ProcessEnv = { ...process.env, KARST_HOME: options.home };
   const scriptArgs: string[] = [];
   if (options.turns) {
     const script = join(options.home, 'script.json');
     writeFileSync(script, JSON.stringify(options.turns));
-    env.CAIRN_SCRIPT = script;
+    env.KARST_SCRIPT = script;
     scriptArgs.push('--provider', 'scripted');
   }
   return spawnSync(process.execPath, [CLI, ...scriptArgs, ...args], {
@@ -37,7 +37,7 @@ function run(args: string[], options: { dir: string; home: string; turns?: Scrip
 describe('command line', () => {
   it('prints help and version', () => {
     const w = workspace();
-    assert.match(run(['--help'], w).stdout, /Usage: cairn/);
+    assert.match(run(['--help'], w).stdout, /Usage: karst/);
     assert.match(run(['--version'], w).stdout, /^\d+\.\d+\.\d+\n$/);
   });
 
@@ -74,7 +74,7 @@ describe('command line', () => {
     writeFileSync(script, JSON.stringify([{ text: 'answered' }]));
     const child = spawn(process.execPath, [CLI, '--provider', 'scripted', '-p', 'hi'], {
       cwd: w.dir,
-      env: { ...process.env, CAIRN_HOME: w.home, CAIRN_SCRIPT: script },
+      env: { ...process.env, KARST_HOME: w.home, KARST_SCRIPT: script },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -112,7 +112,7 @@ describe('command line', () => {
     const start = (...extra: string[]) =>
       spawnSync(process.execPath, ['--preload', trace, CLI, '--provider', 'scripted', '-p', 'hi', ...extra], {
         cwd: w.dir,
-        env: { ...process.env, CAIRN_HOME: w.home, CAIRN_SCRIPT: script },
+        env: { ...process.env, KARST_HOME: w.home, KARST_SCRIPT: script },
         encoding: 'utf8',
         input: '',
         timeout: 30_000,
@@ -131,7 +131,7 @@ describe('command line', () => {
     const { ANTHROPIC_API_KEY: _key, ANTHROPIC_AUTH_TOKEN: _token, ...env } = process.env;
     const result = spawnSync(process.execPath, [CLI, '-p', 'hi'], {
       cwd: w.dir,
-      env: { ...env, CAIRN_HOME: w.home },
+      env: { ...env, KARST_HOME: w.home },
       encoding: 'utf8',
       input: '',
       timeout: 30_000,
@@ -241,9 +241,9 @@ describe('command line', () => {
     const w = workspace();
     const hookMarker = join(w.dir, 'hook-ran');
     const toolMarker = join(w.dir, 'tool-ran');
-    mkdirSync(join(w.dir, '.cairn'));
+    mkdirSync(join(w.dir, '.karst'));
     writeFileSync(
-      join(w.dir, '.cairn/settings.json'),
+      join(w.dir, '.karst/settings.json'),
       JSON.stringify({
         permissions: { allow: ['Bash'] },
         hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${hookMarker}` }] }] },
@@ -268,11 +268,11 @@ describe('command line', () => {
       ...w,
       turns: [
         { toolCalls: [{ name: 'Read', input: { file_path: file } }] },
-        { toolCalls: [{ name: 'Edit', input: { file_path: file, old_string: 'world', new_string: 'cairn' } }] },
+        { toolCalls: [{ name: 'Edit', input: { file_path: file, old_string: 'world', new_string: 'karst' } }] },
         { text: 'Edited.' },
       ],
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(readFileSync(file, 'utf8'), 'hello cairn\n');
+    assert.equal(readFileSync(file, 'utf8'), 'hello karst\n');
   });
 });

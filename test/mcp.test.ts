@@ -39,12 +39,12 @@ const CLI = resolve(import.meta.dirname, '../src/cli.ts');
 
 let home: string;
 beforeAll(() => {
-  home = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-mcp-home-')));
-  process.env.CAIRN_HOME = home;
+  home = realpathSync(mkdtempSync(join(tmpdir(), 'karst-mcp-home-')));
+  process.env.KARST_HOME = home;
 });
 
 function project(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), 'cairn-mcp-')));
+  return realpathSync(mkdtempSync(join(tmpdir(), 'karst-mcp-')));
 }
 
 function stdio(env: Record<string, string> = {}, extra: Partial<McpServerConfig> = {}): McpServerConfig {
@@ -119,26 +119,26 @@ describe('MCP configuration', () => {
 
   it('expands variables, with defaults, and warns about unset ones', () => {
     const dir = project();
-    process.env.CAIRN_TEST_VALUE = 'real';
+    process.env.KARST_TEST_VALUE = 'real';
     try {
       const arg = JSON.stringify({
         mcpServers: {
-          a: { command: 'c', args: ['${CAIRN_TEST_VALUE}', '${CAIRN_TEST_UNSET:-fallback}', '${CAIRN_TEST_UNSET}', '${CAIRN_PROJECT_DIR}'], env: { K: '${CAIRN_TEST_VALUE}' } },
-          b: { url: '${CAIRN_TEST_UNSET:-https://example.com}/mcp', headers: { Authorization: 'Bearer ${CAIRN_TEST_VALUE}' } },
+          a: { command: 'c', args: ['${KARST_TEST_VALUE}', '${KARST_TEST_UNSET:-fallback}', '${KARST_TEST_UNSET}', '${KARST_PROJECT_DIR}'], env: { K: '${KARST_TEST_VALUE}' } },
+          b: { url: '${KARST_TEST_UNSET:-https://example.com}/mcp', headers: { Authorization: 'Bearer ${KARST_TEST_VALUE}' } },
         },
       });
       const { servers, warnings } = config(dir, false, { configArgs: [arg], strict: true });
       const a = servers.find((s) => s.name === 'a')!.config as { args: string[]; env: Record<string, string> };
-      assert.deepEqual(a.args, ['real', 'fallback', '${CAIRN_TEST_UNSET}', dir]);
+      assert.deepEqual(a.args, ['real', 'fallback', '${KARST_TEST_UNSET}', dir]);
       assert.deepEqual(a.env, { K: 'real' });
       const b = servers.find((s) => s.name === 'b')!.config as { url: string; headers: Record<string, string>; type: string };
       assert.equal(b.url, 'https://example.com/mcp');
       assert.equal(b.type, 'http');
       assert.equal(b.headers.Authorization, 'Bearer real');
       assert.equal(warnings.length, 1);
-      assert.match(warnings[0]!, /CAIRN_TEST_UNSET.*not set/);
+      assert.match(warnings[0]!, /KARST_TEST_UNSET.*not set/);
     } finally {
-      delete process.env.CAIRN_TEST_VALUE;
+      delete process.env.KARST_TEST_VALUE;
     }
   });
 
@@ -267,18 +267,18 @@ describe('a real server over stdio', () => {
 
   it('gives a server only a minimal environment, plus what the config names', async () => {
     process.env.ANTHROPIC_API_KEY = 'must-not-leak';
-    process.env.CAIRN_TEST_AMBIENT = 'must-not-leak-either';
+    process.env.KARST_TEST_AMBIENT = 'must-not-leak-either';
     try {
       const manager = await connected({ CONFIGURED: 'yes' });
       const env = JSON.parse((await manager.callTool('t', 'env', {}, signal())).content) as Record<string, string>;
       assert.equal(env.CONFIGURED, 'yes');
-      assert.ok(env.CAIRN_PROJECT_DIR);
+      assert.ok(env.KARST_PROJECT_DIR);
       assert.equal(env.ANTHROPIC_API_KEY, undefined);
-      assert.equal(env.CAIRN_TEST_AMBIENT, undefined);
+      assert.equal(env.KARST_TEST_AMBIENT, undefined);
       assert.ok(env.PATH);
     } finally {
       delete process.env.ANTHROPIC_API_KEY;
-      delete process.env.CAIRN_TEST_AMBIENT;
+      delete process.env.KARST_TEST_AMBIENT;
     }
   });
 
@@ -443,7 +443,7 @@ describe('deferred tools in the API request', () => {
 });
 
 describe('permissions for MCP tools', () => {
-  const cwd = '/tmp/cairn-mcp-perms';
+  const cwd = '/tmp/karst-mcp-perms';
   function engine(mode: PermissionMode = 'default', rules: Partial<Record<RuleBehavior, string[]>> = {}): PermissionEngine {
     const parsed = (['allow', 'ask', 'deny'] as const).flatMap((behavior) => (rules[behavior] ?? []).map((text) => parseRule(text, behavior, 'user', cwd)!));
     return new PermissionEngine({ mode, rules: parsed, workingDirs: [cwd], cwd: () => cwd });
@@ -983,15 +983,15 @@ describe('a real server over HTTP', () => {
   });
 });
 
-describe('the cairn mcp command', () => {
+describe('the karst mcp command', () => {
   let dir: string;
   let cliHome: string;
   beforeEach(() => {
     dir = project();
-    cliHome = realpathSync(mkdtempSync(join(tmpdir(), 'cairn-mcp-cli-')));
+    cliHome = realpathSync(mkdtempSync(join(tmpdir(), 'karst-mcp-cli-')));
   });
   const cli = (args: string[], extra: NodeJS.ProcessEnv = {}) =>
-    spawnSync(process.execPath, [CLI, ...args], { cwd: dir, env: { ...process.env, CAIRN_HOME: cliHome, ...extra }, encoding: 'utf8', input: '', timeout: 30_000 });
+    spawnSync(process.execPath, [CLI, ...args], { cwd: dir, env: { ...process.env, KARST_HOME: cliHome, ...extra }, encoding: 'utf8', input: '', timeout: 30_000 });
 
   it('adds, shows, lists and removes a stdio server', () => {
     const added = cli(['mcp', 'add', 'fix', '-e', 'TOKEN=very-secret', process.execPath, '--', FIXTURE]);
@@ -1038,7 +1038,7 @@ describe('the cairn mcp command', () => {
     const script = join(cliHome, 'script.json');
     writeFileSync(script, JSON.stringify([{ toolCalls: [{ name: 'mcp__fix__echo', input: { text: 'through the app' } }] }, { text: 'finished' }]));
     const config = JSON.stringify({ mcpServers: { fix: stdio() } });
-    const result = cli(['-p', 'go', '--provider', 'scripted', '--mcp-config', config, '--strict-mcp-config', '--allowedTools', 'mcp__fix', '--output-format', 'stream-json'], { CAIRN_SCRIPT: script });
+    const result = cli(['-p', 'go', '--provider', 'scripted', '--mcp-config', config, '--strict-mcp-config', '--allowedTools', 'mcp__fix', '--output-format', 'stream-json'], { KARST_SCRIPT: script });
     assert.equal(result.status, 0, result.stderr);
     const events = result.stdout.trim().split('\n').map((line) => JSON.parse(line) as { type: string; message?: { content: { type: string; content?: string }[] } });
     const toolResult = events.flatMap((event) => (event.type === 'user' ? event.message!.content : [])).find((block) => block.type === 'tool_result');
@@ -1051,16 +1051,16 @@ describe('the cairn mcp command', () => {
     writeFileSync(join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { evil: { command: '/bin/sh', args: ['-c', `touch ${marker}`] } } }));
     const script = join(cliHome, 'script.json');
     writeFileSync(script, JSON.stringify([{ text: 'ok' }, { text: 'ok' }]));
-    const untrusted = cli(['-p', 'go', '--provider', 'scripted'], { CAIRN_SCRIPT: script });
+    const untrusted = cli(['-p', 'go', '--provider', 'scripted'], { KARST_SCRIPT: script });
     assert.equal(untrusted.status, 0, untrusted.stderr);
     assert.equal(existsSync(marker), false);
     assert.match(untrusted.stderr, /stay inactive/);
 
-    cli(['-p', 'go', '--provider', 'scripted', '--trust'], { CAIRN_SCRIPT: script, MCP_TIMEOUT: '1000' });
+    cli(['-p', 'go', '--provider', 'scripted', '--trust'], { KARST_SCRIPT: script, MCP_TIMEOUT: '1000' });
     assert.equal(existsSync(marker), true);
   });
 });
 
 afterAll(() => {
-  delete process.env.CAIRN_HOME;
+  delete process.env.KARST_HOME;
 });
