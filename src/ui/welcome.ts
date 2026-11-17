@@ -75,6 +75,7 @@ export function welcomeRows(runtime: Runtime): WelcomeRow[] {
     ...(servers.length > 0 ? [`${plural(servers.length, 'MCP server')}${connected < servers.length ? ` (${connected} connected)` : ''}`] : []),
     ...(skills > 0 ? [plural(skills, 'skill')] : []),
     ...(runtime.plugins.length > 0 ? [plural(runtime.plugins.length, 'plugin')] : []),
+    ...(runtime.languageServers.length > 0 ? [`language servers: ${runtime.languageServers.join(', ')}`] : []),
   ];
   const rows: WelcomeRow[] = [
     {

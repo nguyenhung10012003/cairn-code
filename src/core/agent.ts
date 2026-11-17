@@ -86,6 +86,11 @@ export interface AgentOptions {
   /** The main agent ends a skill's turn-long grants. A subagent shares them and must not. */
   ownsTurnState?: boolean;
   watcher?: AgentWatcher;
+  /**
+   * After an Edit or Write, what a language server reports about the file, for the model to read
+   * with the result. Null when there is nothing to say.
+   */
+  diagnostics?: (path: string) => Promise<{ note: string; errors: number } | null>;
   /** Before a prompt joins the conversation, so anything new can go along with it. */
   onPromptStart?: () => void;
   /** Text to send with the next user message because of the session's state, such as plan mode. */
@@ -722,6 +727,13 @@ export class Agent {
     if (!output.isError && FILE_TOOLS.has(use.name)) {
       const access = tool.access(input, ctx);
       if (access.kind === 'read' || access.kind === 'edit') this.options.watcher?.touched(access.paths);
+      if (access.kind === 'edit' && (use.name === 'Edit' || use.name === 'Write') && this.options.diagnostics && !ctx.signal.aborted) {
+        const report = await this.options.diagnostics(access.paths[0]!).catch(() => null);
+        if (report) {
+          const display = `${output.display ?? ''}${output.display ? ' · ' : ''}${report.errors} ${report.errors === 1 ? 'error' : 'errors'}`;
+          output = { ...output, content: `${output.content}\n\n${report.note}`, display };
+        }
+      }
     }
     const cap = Math.max(MAX_TOOL_RESULT_CHARS, output.maxChars ?? 0);
     if (output.content.length > cap) {

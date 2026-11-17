@@ -7,6 +7,8 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statS
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { appHome, userSettingsPath } from '../config/paths.ts';
 import type { HookGroup, HooksConfig } from '../config/settings.ts';
+import { describeSource, fetchSource, isPinnedCommit, parseSource, readSources, sameVersion, specToUpdate, writeSource } from './sources.ts';
+import type { Fetched } from './sources.ts';
 
 const MANIFEST_DIRS = ['.karst-plugin', '.claude-plugin'];
 const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
@@ -285,17 +287,124 @@ function enabledMap(): Record<string, boolean> {
   }
 }
 
+/** One line for each thing the plugin brings, most of all what it can run. */
+export function describeContents(plugin: Plugin): string[] {
+  const warnings: string[] = [];
+  const names = (paths: string[], pick: (path: string) => string[]): string[] => paths.flatMap(pick).sort();
+  const markdownIn = (path: string): string[] => {
+    if (!isDirectory(path)) return path.endsWith('.md') ? [basename(path, '.md')] : [];
+    return readdirSync(path).filter((name) => name.endsWith('.md')).map((name) => basename(name, '.md'));
+  };
+  const skills = names(plugin.skillDirs, (dir) =>
+    existsSync(join(dir, 'SKILL.md')) ? [basename(dir)] : isDirectory(dir) ? readdirSync(dir).filter((name) => existsSync(join(dir, name, 'SKILL.md'))) : [],
+  );
+  const lines: string[] = [];
+  if (skills.length > 0) lines.push(`Skills: ${skills.join(', ')}`);
+  const commands = names(plugin.commandPaths, markdownIn);
+  if (commands.length > 0) lines.push(`Commands: ${commands.map((name) => `/${plugin.name}:${name}`).join(', ')}`);
+  const agents = names(plugin.agentPaths, markdownIn);
+  if (agents.length > 0) lines.push(`Agents: ${agents.join(', ')}`);
+  const hooks = pluginHooks(plugin, '${KARST_PROJECT_DIR}', warnings);
+  for (const [event, groups] of Object.entries(hooks)) {
+    for (const group of groups) {
+      for (const handler of group.hooks ?? []) {
+        const what =
+          handler.type === 'command'
+            ? `runs ${[handler.command, ...(handler.args ?? [])].join(' ')}`
+            : handler.type === 'http'
+              ? `sends each event to ${handler.url}`
+              : handler.type === 'prompt'
+                ? 'asks the model'
+                : `a ${handler.type} hook`;
+        lines.push(`Hook on ${event}${group.matcher ? ` (${group.matcher})` : ''}: ${what}`);
+      }
+    }
+  }
+  for (const [name, config] of Object.entries(pluginMcpServers(plugin, '${KARST_PROJECT_DIR}', warnings))) {
+    const server = config as { command?: string; args?: string[]; url?: string };
+    lines.push(`MCP server ${name}: ${server.url ? `connects to ${server.url}` : `runs ${[server.command, ...(server.args ?? [])].filter(Boolean).join(' ')}`}`);
+  }
+  if (plugin.binDir) {
+    const programs = readdirSync(plugin.binDir).sort();
+    if (programs.length > 0) lines.push(`Programs on the PATH of commands the model runs: ${programs.join(', ')}`);
+  }
+  return lines.length > 0 ? lines : ['Nothing that runs: only text.'];
+}
+
+async function confirm(question: string): Promise<boolean> {
+  const { createInterface } = await import('node:readline/promises');
+  const lines = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return /^y(es)?$/i.test((await lines.question(`${question} [y/N] `)).trim());
+  } finally {
+    lines.close();
+  }
+}
+
 const USAGE = `Usage: karst plugin <command>
 
   validate <path> [--strict]      Check a plugin without loading it
-  install <path>                  Copy a local plugin into ~/.karst/plugins
+  install <source> [options]      Install a plugin from a directory, an archive (.zip, .tar.gz,
+                                  .tgz, .tar), a git repository or an archive URL
+      --ref <branch|tag|commit>     For git: what to check out (or add #ref to the source)
+      --path <dir>                  The plugin's folder inside the source
+      --yes                         Install without asking
+  update <name>|--all [--yes]     Fetch the newest version of what it was installed from
   uninstall <name> [--keep-data]  Remove an installed plugin
-  list                            Show installed plugins
+  list                            Show installed plugins and where they came from
   enable <name>                   Turn an installed plugin on
   disable <name>                  Turn an installed plugin off
+
+Sources: ./dir, ./kit.zip, github:owner/repo, https://github.com/owner/repo,
+git@host:owner/repo.git, https://host/kit.tar.gz. A git source is pinned to the
+commit it was installed at, an archive URL to the SHA-256 of what was downloaded.
 `;
 
-export function runPluginCommand(args: string[]): number {
+function optionValue(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+/**
+ * Shows what the plugin brings, asks when it comes from elsewhere, and copies it in. A local
+ * directory is the user's own, so it is shown but not asked about.
+ */
+async function installFetched(fetched: Fetched, args: string[], print: (text: string) => void, previous?: Plugin): Promise<string | null> {
+  const report = readPlugin(fetched.root, 'installed');
+  if (!report.plugin) throw new Error(`Cannot install: ${report.errors.join(' ')}`);
+  const plugin = report.plugin;
+  const destination = join(installedPluginsDir(), plugin.name);
+  if (resolve(destination) === plugin.root) throw new Error(`${plugin.name} is already installed from there.`);
+  const contents = describeContents(plugin);
+  print(`${plugin.name}${plugin.version ? ` ${plugin.version}` : ''}${plugin.description ? `: ${plugin.description}` : ''}`);
+  print(`From ${describeSource(fetched.source)}`);
+  if (previous) {
+    const before = new Set(describeContents(previous));
+    const after = new Set(contents);
+    const added = contents.filter((line) => !before.has(line));
+    const removed = [...before].filter((line) => !after.has(line));
+    if (added.length === 0 && removed.length === 0) print('  What it contains is the same; its files may still differ.');
+    for (const line of added) print(`  + ${line}`);
+    for (const line of removed) print(`  - ${line}`);
+  } else {
+    for (const line of contents) print(`  ${line}`);
+  }
+  for (const warning of report.warnings) print(`warning: ${warning}`);
+  const remote = fetched.source.type !== 'local';
+  if (remote && !args.includes('--yes')) {
+    if (!process.stdin.isTTY) throw new Error('Add --yes to install a plugin from elsewhere without a terminal to ask in.');
+    const question = previous ? `Update ${plugin.name}?` : `Install ${plugin.name}? Its hooks, MCP servers and programs run on this machine with your permissions.`;
+    if (!(await confirm(question))) return null;
+  }
+  mkdirSync(installedPluginsDir(), { recursive: true });
+  rmSync(destination, { recursive: true, force: true });
+  cpSync(plugin.root, destination, { recursive: true, verbatimSymlinks: true, filter: (path) => basename(path) !== '.git' });
+  writeSource(plugin.name, fetched.source);
+  if (!previous) setEnabled(plugin.name, true);
+  return plugin.name;
+}
+
+export async function runPluginCommand(args: string[]): Promise<number> {
   const [command, target] = args;
   const print = (text: string): void => void process.stdout.write(`${text}\n`);
   const fail = (text: string): number => {
@@ -320,18 +429,76 @@ export function runPluginCommand(args: string[]): number {
       return 0;
     }
     case 'install': {
+      if (!target || target.startsWith('--')) return fail(USAGE);
+      const ref = optionValue(args, '--ref');
+      const path = optionValue(args, '--path');
+      const spec = parseSource(target, { ...(ref ? { ref } : {}), ...(path ? { path } : {}) });
+      if (!spec) return fail(`${target} is not a directory, an archive, a git repository or an archive URL. For a git server Karst does not know, add .git or git+ to the URL.`);
+      let fetched: Fetched;
+      try {
+        fetched = await fetchSource(spec);
+      } catch (error) {
+        return fail((error as Error).message);
+      }
+      try {
+        const name = await installFetched(fetched, args, print);
+        if (!name) return fail('Not installed.');
+        print(`Installed ${name}.`);
+        return 0;
+      } catch (error) {
+        return fail((error as Error).message);
+      } finally {
+        fetched.cleanup();
+      }
+    }
+    case 'update': {
       if (!target) return fail(USAGE);
-      const report = readPlugin(target, 'installed');
-      if (!report.plugin) return fail(`Cannot install: ${report.errors.join(' ')}`);
-      const destination = join(installedPluginsDir(), report.plugin.name);
-      if (resolve(destination) === report.plugin.root) return fail(`${report.plugin.name} is already installed from there.`);
-      mkdirSync(installedPluginsDir(), { recursive: true });
-      rmSync(destination, { recursive: true, force: true });
-      cpSync(report.plugin.root, destination, { recursive: true, verbatimSymlinks: true });
-      setEnabled(report.plugin.name, true);
-      for (const warning of report.warnings) print(`warning: ${warning}`);
-      print(`Installed ${report.plugin.name}${report.plugin.version ? ` ${report.plugin.version}` : ''}. It can run commands through its hooks and MCP servers.`);
-      return 0;
+      const sources = readSources();
+      const names = target === '--all' ? Object.keys(sources).filter((name) => isDirectory(join(installedPluginsDir(), name))).sort() : [target];
+      if (names.length === 0) return fail('No installed plugin has a source to update from.');
+      let failed = 0;
+      for (const name of names) {
+        const source = sources[name];
+        if (!NAME_PATTERN.test(name) || !isDirectory(join(installedPluginsDir(), name))) {
+          failed++;
+          print(`${name}: not installed.`);
+          continue;
+        }
+        if (!source) {
+          failed++;
+          print(`${name}: no source was recorded, as it was installed before Karst kept them. Install it again from where it came from.`);
+          continue;
+        }
+        if (isPinnedCommit(source)) {
+          print(`${name}: pinned to commit ${source.type === 'git' ? source.commit.slice(0, 12) : ''}. Install it again with another --ref to move it.`);
+          continue;
+        }
+        let fetched: Fetched;
+        try {
+          fetched = await fetchSource(specToUpdate(source));
+        } catch (error) {
+          failed++;
+          print(`${name}: ${(error as Error).message}`);
+          continue;
+        }
+        try {
+          if (sameVersion(source, fetched.source)) {
+            print(`${name}: up to date (${describeSource(source)}).`);
+            continue;
+          }
+          const previous = readPlugin(join(installedPluginsDir(), name), 'installed').plugin ?? undefined;
+          const updated = await installFetched(fetched, args, print, previous);
+          if (updated && updated !== name) {
+            print(`${name}: the source now holds a plugin named ${updated}, installed beside it.`);
+          } else print(updated ? `${name}: updated.` : `${name}: left as it was.`);
+        } catch (error) {
+          failed++;
+          print(`${name}: ${(error as Error).message}`);
+        } finally {
+          fetched.cleanup();
+        }
+      }
+      return failed > 0 ? 1 : 0;
     }
     case 'uninstall': {
       if (!target) return fail(USAGE);
@@ -340,17 +507,20 @@ export function runPluginCommand(args: string[]): number {
       if (!NAME_PATTERN.test(target) || !isDirectory(destination)) return fail(`No installed plugin named ${target}.`);
       rmSync(destination, { recursive: true, force: true });
       if (!args.includes('--keep-data')) rmSync(pluginDataDir(target), { recursive: true, force: true });
+      writeSource(target, null);
       print(`Uninstalled ${target}.`);
       return 0;
     }
     case 'list': {
       const loaded = loadPlugins({ includeInstalled: true });
       const enabled = enabledMap();
+      const sources = readSources();
       const names = isDirectory(installedPluginsDir()) ? readdirSync(installedPluginsDir()).sort() : [];
       if (names.length === 0) print('No plugins installed.');
       for (const name of names) {
         const plugin = loaded.plugins.find((candidate) => basename(candidate.root) === name);
-        print(`${name}${plugin?.version ? ` ${plugin.version}` : ''}  ${enabled[name] === false ? 'disabled' : 'enabled'}${plugin?.description ? `  ${plugin.description}` : ''}`);
+        const source = sources[name];
+        print(`${name}${plugin?.version ? ` ${plugin.version}` : ''}  ${enabled[name] === false ? 'disabled' : 'enabled'}${plugin?.description ? `  ${plugin.description}` : ''}${source ? `\n  from ${describeSource(source)}` : ''}`);
       }
       for (const warning of loaded.warnings) print(`warning: ${warning}`);
       return 0;

@@ -1,6 +1,6 @@
 /** Hooks, plugins, command-line flags, subcommands and slash commands. */
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -14,6 +14,7 @@ import type { Runtime, RuntimeOptions } from '../src/core/runtime.ts';
 import { HookRunner } from '../src/hooks/runner.ts';
 import { buildParams } from '../src/providers/anthropic.ts';
 import { loadPlugins, pluginHooks, pluginMcpServers, readPlugin } from '../src/plugins/plugins.ts';
+import { parseSource } from '../src/plugins/sources.ts';
 import { ScriptedProvider } from '../src/providers/scripted.ts';
 import type { ScriptedTurn } from '../src/providers/scripted.ts';
 import { promptFromInputLine } from '../src/ui/print.ts';
@@ -348,6 +349,96 @@ describe('plugins', () => {
     assert.equal(cli(['plugin', 'enable', 'kit'], env).status, 0);
     assert.equal(cli(['plugin', 'uninstall', 'kit'], env).status, 0);
     assert.equal(existsSync(join(home, 'plugins/kit')), false);
+  });
+
+  it('installs from git pinned to a commit, says what it contains, and updates to a newer commit', () => {
+    const home = tempDir('karst-pluginhome-');
+    const env = { KARST_HOME: home };
+    const repo = tempDir('karst-pluginrepo-');
+    const gitIn = (...args: string[]) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'init.defaultBranch=main', ...args], { cwd: repo, encoding: 'utf8' });
+    gitIn('init', '-q');
+    write(repo, '.karst-plugin/plugin.json', JSON.stringify({ name: 'remote-kit', version: '1.0.0', description: 'From git' }));
+    write(repo, 'skills/deploy/SKILL.md', '---\ndescription: d\n---\nb');
+    write(repo, 'hooks/hooks.json', JSON.stringify({ hooks: { PostToolUse: [{ matcher: 'Edit', hooks: [{ type: 'command', command: '${KARST_PLUGIN_ROOT}/lint.sh' }] }] } }));
+    gitIn('add', '.');
+    gitIn('commit', '-qm', 'one');
+    const first = gitIn('rev-parse', 'HEAD').stdout.trim();
+    const url = `file://${repo}/.git`;
+
+    const refused = cli(['plugin', 'install', url], env);
+    assert.equal(refused.status, 1, 'from elsewhere and with no terminal to ask in, it needs --yes');
+    assert.match(refused.stderr, /--yes/);
+    assert.match(refused.stdout, /Hook on PostToolUse \(Edit\): runs .*lint\.sh/, 'it still says what the plugin contains');
+    assert.equal(existsSync(join(home, 'plugins/remote-kit')), false);
+
+    const installed = cli(['plugin', 'install', url, '--yes'], env);
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.match(installed.stdout, /Skills: deploy/);
+    assert.match(installed.stdout, new RegExp(`at commit ${first.slice(0, 12)}`));
+    assert.equal(existsSync(join(home, 'plugins/remote-kit/.git')), false);
+    const recorded = JSON.parse(readFileSync(join(home, 'plugin-sources.json'), 'utf8')) as Record<string, { commit: string }>;
+    assert.equal(recorded['remote-kit']!.commit, first);
+    assert.match(cli(['plugin', 'list'], env).stdout, /from file:\/\/.* at commit/);
+
+    assert.match(cli(['plugin', 'update', 'remote-kit'], env).stdout, /up to date/);
+    write(repo, '.mcp.json', JSON.stringify({ mcpServers: { api: { command: 'node', args: ['server.js'] } } }));
+    gitIn('add', '.');
+    gitIn('commit', '-qm', 'two');
+    const second = gitIn('rev-parse', 'HEAD').stdout.trim();
+    const updated = cli(['plugin', 'update', '--all', '--yes'], env);
+    assert.equal(updated.status, 0, updated.stdout + updated.stderr);
+    assert.match(updated.stdout, /\+ MCP server plugin_remote-kit_api: runs node server\.js/, 'the update shows what is new');
+    assert.match(updated.stdout, /remote-kit: updated/);
+    assert.equal((JSON.parse(readFileSync(join(home, 'plugin-sources.json'), 'utf8')) as Record<string, { commit: string }>)['remote-kit']!.commit, second);
+
+    const pinned = cli(['plugin', 'install', url, '--ref', first, '--yes'], env);
+    assert.equal(pinned.status, 0, pinned.stderr);
+    assert.equal(existsSync(join(home, 'plugins/remote-kit/.mcp.json')), false, 'the older commit has no MCP server');
+    assert.match(cli(['plugin', 'update', 'remote-kit'], env).stdout, /pinned to commit/);
+    assert.equal(cli(['plugin', 'uninstall', 'remote-kit'], env).status, 0);
+    assert.deepEqual(JSON.parse(readFileSync(join(home, 'plugin-sources.json'), 'utf8')), {});
+  });
+
+  it('installs from an archive, local or downloaded, pinned to what was downloaded', async () => {
+    const home = tempDir('karst-pluginhome-');
+    const env = { KARST_HOME: home };
+    const holder = tempDir('karst-pluginarchive-');
+    write(holder, 'kit-main/.karst-plugin/plugin.json', JSON.stringify({ name: 'packed', version: '2.0.0' }));
+    write(holder, 'kit-main/commands/hello.md', 'Say hello.');
+    const archive = join(holder, 'kit.tar.gz');
+    assert.equal(spawnSync('tar', ['-czf', archive, '-C', holder, 'kit-main']).status, 0);
+    const local = cli(['plugin', 'install', archive], env);
+    assert.equal(local.status, 0, local.stderr);
+    assert.match(local.stdout, /Commands: \/packed:hello/, 'the single folder in the archive is the plugin');
+
+    const server = createServer((_req, res) => res.end(readFileSync(archive)));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/kit.tar.gz`;
+    try {
+      const run = (args: string[]) =>
+        new Promise<{ status: number | null; stdout: string }>((resolve) => {
+          const child = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+          let stdout = '';
+          child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+          child.on('exit', (status) => resolve({ status, stdout }));
+        });
+      const downloaded = await run(['plugin', 'install', url, '--yes']);
+      assert.equal(downloaded.status, 0, downloaded.stdout);
+      assert.match(downloaded.stdout, /sha256 [0-9a-f]{12}/);
+      assert.match((await run(['plugin', 'update', 'packed'])).stdout, /up to date/);
+    } finally {
+      server.close();
+    }
+    assert.equal(cli(['plugin', 'install', 'https://example.com/not-a-plugin'], env).status, 1);
+  });
+
+  it('reads sources: paths, github shorthand, git URLs with a ref, and archive URLs', () => {
+    assert.deepEqual(parseSource('github:owner/kit#v1'), { type: 'git', url: 'https://github.com/owner/kit.git', ref: 'v1' });
+    assert.deepEqual(parseSource('https://github.com/owner/kit'), { type: 'git', url: 'https://github.com/owner/kit' });
+    assert.deepEqual(parseSource('git@example.com:o/kit.git', { path: 'plugins/a' }), { type: 'git', url: 'git@example.com:o/kit.git', path: 'plugins/a' });
+    assert.deepEqual(parseSource('https://example.com/kit.zip'), { type: 'archive', url: 'https://example.com/kit.zip' });
+    assert.equal(parseSource('https://example.com/page'), null);
+    assert.deepEqual(parseSource('/abs/kit'), { type: 'local', path: '/abs/kit' });
   });
 
   it('will not delete anything outside the plugins folder on uninstall', () => {

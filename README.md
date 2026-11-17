@@ -406,10 +406,28 @@ toolkit/
 karst --plugin-dir ./toolkit        # for this run only
 karst plugin validate ./toolkit     # add --strict to treat warnings as errors
 karst plugin install ./toolkit      # copy into ~/.karst/plugins
+karst plugin install ./toolkit.zip  # or .tar.gz, .tgz, .tar
+karst plugin install github:owner/toolkit#v1.2 --path plugins/toolkit
+karst plugin install https://example.com/toolkit.tar.gz
+karst plugin update toolkit         # or --all
 karst plugin list | enable | disable | uninstall
 ```
 
-Inside a plugin, use `${KARST_PLUGIN_ROOT}`, `${KARST_PLUGIN_DATA}` and `${KARST_PROJECT_DIR}`; the `${CLAUDE_...}` forms work too. **Plugins can run commands through hooks and MCP servers**, so install only what you trust. Not yet supported: marketplaces, installing from git or a URL, `userConfig`, LSP.
+**Installing from elsewhere:** a source is a directory, a local archive, a git repository (`github:owner/repo`, a URL ending in `.git`, `git@…`, `ssh://…`, `git+https://…`, or a repository on github.com, gitlab.com, bitbucket.org or codeberg.org), or a URL to an archive. `#ref` or `--ref` picks a branch, tag or commit, and `--path` the plugin's folder inside the source. An archive holding a single folder installs that folder. Before installing, Karst lists what the plugin brings: its skills, commands and agents, each hook and the command it runs, each MCP server and the program it starts, and the programs in `bin/`. A plugin from git or a URL is installed only after you answer yes, or with `--yes`; without a terminal, `--yes` is required. A local directory or archive is listed but not asked about.
+
+**Pinned versions:** a git source is installed at the commit it resolved to, and an archive URL with the SHA-256 of what was downloaded, recorded in `~/.karst/plugin-sources.json`. `karst plugin update <name>` fetches the branch, tag or default branch again; if the commit or the archive's hash is the same, it says the plugin is up to date. Otherwise it lists what the new version adds (`+`) and no longer has (`-`), asks, and replaces the installed copy. A plugin installed with a full commit id as its ref stays on it; install it again with another `--ref` to move it. Submodules are not fetched, and `.git` is not copied. A plugin installed before Karst recorded sources has to be installed again to be updated.
+
+Inside a plugin, use `${KARST_PLUGIN_ROOT}`, `${KARST_PLUGIN_DATA}` and `${KARST_PROJECT_DIR}`; the `${CLAUDE_...}` forms work too. **Plugins can run commands through hooks and MCP servers**, so install only what you trust. Not yet supported: marketplaces, `userConfig`, and language servers in plugins.
+
+## Language servers
+
+After each `Edit` or `Write`, Karst sends the file's new text to a language server and adds the errors it reports to the tool's result, so the model sees a type error or a typo in a name at once rather than at the next build. Only errors are reported, up to 10 per file, as `<diagnostics>` with each line and column; the terminal shows the count after the result, such as `1 replacement · 2 errors`. Warnings are left out, since a change half made has many.
+
+- **TypeScript and JavaScript** (`.ts .tsx .mts .cts .js .jsx .mjs .cjs`) are covered by `typescript-language-server`, which Karst installs with itself. It uses the project's own `typescript` package, or a global one. The standalone binary from `bun run build` has no copy of its own and uses one on the `PATH`.
+- **Other languages** are covered when their server is on the `PATH`: `pyright-langserver` (Python), `gopls` (Go), `rust-analyzer` (Rust) and `clangd` (C and C++).
+- **Settings** add servers and turn them off: `"lsp": {"servers": {"vue": {"command": "vue-language-server", "args": ["--stdio"], "extensionToLanguage": {".vue": "vue"}}, "clangd": false}}`. A server takes `env` and `initializationOptions` too. A server from settings comes before a built-in one for the same extension. `"lsp": {"enabled": false}` turns them all off.
+
+Each server starts the first time a file it covers is edited, and stops when the session ends. The first check waits up to 15 seconds while the server loads the project, and later ones up to 4; a server that answers later than that adds nothing to that edit. A server that fails to start is off for the rest of the session, with one notice. Language servers run code from the project they open, such as TypeScript plugins and Rust build scripts, so they run only in a trusted directory, and not with `--bare`. The opening panel names the servers that may run.
 
 ## Sandbox
 

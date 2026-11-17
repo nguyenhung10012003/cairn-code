@@ -18,6 +18,7 @@ import { PERMISSION_MODES } from '../permissions/engine.ts';
 import type { PermissionMode } from '../permissions/engine.ts';
 import type { Effort, ProviderConfig } from '../core/provider.ts';
 import type { SandboxSettings } from '../sandbox/sandbox.ts';
+import type { LspSettings } from '../lsp/manager.ts';
 
 export interface HookHandler {
   type: string;
@@ -91,6 +92,8 @@ export interface Settings {
   theme?: string;
   /** `vim` edits the prompt with vim keys. */
   editorMode?: string;
+  /** Language servers whose errors the model sees after each Edit or Write. */
+  lsp?: LspSettings;
 }
 
 export interface StatusLineSettings {
@@ -142,6 +145,7 @@ export interface LoadedSettings {
   statusLine?: StatusLineSettings;
   theme?: string;
   editorMode?: string;
+  lsp: LspSettings;
 }
 
 function readJson(path: string, warnings: string[]): Settings | null {
@@ -164,6 +168,7 @@ function hasPrivilegedParts(settings: Settings): boolean {
     (settings.permissions?.allow?.length ?? 0) > 0 ||
     Object.keys(settings.hooks ?? {}).length > 0 ||
     settings.statusLine !== undefined ||
+    Object.keys(settings.lsp?.servers ?? {}).length > 0 ||
     settings.provider !== undefined ||
     settings.sandbox !== undefined ||
     Object.keys(settings.env ?? {}).length > 0 ||
@@ -190,6 +195,7 @@ export function loadSettings(options: LoadOptions): LoadedSettings {
     autoMemoryEnabled: true,
     updateCheck: true,
     autoUpdates: false,
+    lsp: {},
   };
 
   const addRules = (texts: unknown, behavior: RuleBehavior, source: RuleSource, anchor: string): void => {
@@ -226,6 +232,13 @@ export function loadSettings(options: LoadOptions): LoadedSettings {
     }
     if (typeof settings.theme === 'string') result.theme = settings.theme;
     if (typeof settings.editorMode === 'string') result.editorMode = settings.editorMode;
+    if (settings.lsp && typeof settings.lsp === 'object') {
+      result.lsp = {
+        ...result.lsp,
+        ...(typeof settings.lsp.enabled === 'boolean' ? { enabled: settings.lsp.enabled } : {}),
+        servers: { ...result.lsp.servers, ...(settings.lsp.servers ?? {}) },
+      };
+    }
     Object.assign(result.env, settings.env);
     if (settings.sandbox) result.sandbox = mergeSandboxSettings(result.sandbox, settings.sandbox);
     for (const [name, config] of Object.entries(settings.providers ?? {})) {

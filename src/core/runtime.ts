@@ -5,6 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { Agent } from './agent.ts';
@@ -45,6 +46,7 @@ import { isTrusted } from '../config/trust.ts';
 import { FileWatcher } from '../hooks/file-watch.ts';
 import { HookRunner } from '../hooks/runner.ts';
 import type { HookCommonInput, HookResult } from '../hooks/runner.ts';
+import { LspManager, lspServers } from '../lsp/manager.ts';
 import { loadMcpConfig } from '../mcp/config.ts';
 import { McpManager } from '../mcp/manager.ts';
 import { PermissionEngine } from '../permissions/engine.ts';
@@ -215,6 +217,8 @@ export interface Runtime {
   projectDir: string;
   trusted: boolean;
   plugins: Plugin[];
+  /** The language servers that check files after Edit and Write, by name. Each starts when first needed. */
+  languageServers: string[];
   sandbox: Sandbox | null;
   agents: SubagentDefinition[];
   sessionName: string | undefined;
@@ -626,6 +630,22 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   // A sandboxed command reaching a domain the settings do not name asks the person at the
   // terminal. Nobody is there to ask in an unattended session, so it is refused.
   const askNetwork = options.unattended ? undefined : networkQuestion(options.prompter, projectDir, options.onNotice);
+  // Language servers run code from the project they open, as TypeScript plugins and build scripts
+  // do, so only in a trusted directory.
+  const lspFound = trusted && !bare ? lspServers(settings.lsp) : { servers: [], warnings: [] };
+  warnings.push(...lspFound.warnings);
+  const lsp = lspFound.servers.length > 0 ? new LspManager({ rootDir: projectDir, servers: lspFound.servers, onWarning: (text) => options.onNotice?.(text) }) : undefined;
+  const diagnostics = lsp
+    ? async (path: string): Promise<{ note: string; errors: number } | null> => {
+        let text: string;
+        try {
+          text = await readFile(path, 'utf8');
+        } catch {
+          return null;
+        }
+        return lsp.report(path, text);
+      }
+    : undefined;
   const created = await createSandbox(settings.sandbox, { cwd: projectDir, workingDirs: () => engine.workingDirs(), ...(askNetwork ? { askNetwork } : {}) });
   warnings.push(...created.warnings);
   engine.sandbox = created.sandbox;
@@ -902,6 +922,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       store: SessionStore.ephemeral(),
       context: subagentContext,
       watcher: subagentNotes,
+      ...(diagnostics ? { diagnostics } : {}),
       maxTurns: SUBAGENT_MAX_TURNS,
       autoCompact: false,
       // A fork keeps the parent's server tools; a fresh agent gets them unless its definition drops WebSearch.
@@ -1177,6 +1198,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     ownsTurnState: true,
     autoCompact: settings.autoCompact,
     watcher: agentWatcher,
+    ...(diagnostics ? { diagnostics } : {}),
     onPromptStart: () => {
       void refreshSkills();
       if (!titled) {
@@ -1312,6 +1334,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     projectDir,
     trusted,
     plugins,
+    languageServers: lsp?.serverNames ?? [],
     sandbox: created.sandbox,
     agents: agentDefinitions,
     allowBypassMode: options.allowBypassMode === true,
@@ -1390,6 +1413,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       // What has not exited yet gets KILL from it after a grace period, which Karst, exiting, cannot send.
       reaper.close();
       fileWatcher?.close();
+      await lsp?.close();
       await created.sandbox?.close();
       await mcp.close();
       await hooks.run('SessionEnd', common());
