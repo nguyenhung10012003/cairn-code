@@ -83,10 +83,10 @@ export function chooseWithNote(options: ChoiceOption[], settings: { cancelIndex:
       const lines = options.map((option, i) => {
         const number = `${i + 1}. `;
         if (i !== selected) return `  ${style.dim(number)}${clip(sanitize(option.label), width - 2 - number.length)}`;
-        if (!noting) return `${style.cyan('❯')} ${style.cyan(`${number}${clip(sanitize(option.label), width - 2 - number.length)}`)}`;
+        if (!noting) return `${style.accent('❯')} ${style.accent(`${number}${clip(sanitize(option.label), width - 2 - number.length)}`)}`;
         const prompt = `${number}${sanitize(option.notePrompt)}: `;
         const room = Math.max(4, width - 3 - displayWidth(prompt));
-        return `${style.cyan('❯')} ${style.cyan(prompt)}${tailToWidth(sanitize(note), room)}\x1b[7m \x1b[27m`;
+        return `${style.accent('❯')} ${style.accent(prompt)}${tailToWidth(sanitize(note), room)}\x1b[7m \x1b[27m`;
       });
       const hint = noting
         ? '  Enter choose with this note · Esc back'
@@ -100,7 +100,7 @@ export function chooseWithNote(options: ChoiceOption[], settings: { cancelIndex:
       erase(out, drawn);
       const option = options[index]!;
       const text = withNote ? `${option.notePrompt}: ${withNote}` : option.label;
-      out.write(`${style.cyan('→')} ${clip(sanitize(text), Math.max(20, (out.columns || 80) - 3))}\n\x1b[?25h`);
+      out.write(`${style.accent('→')} ${clip(sanitize(text), Math.max(20, (out.columns || 80) - 3))}\n\x1b[?25h`);
       resolve(withNote ? { index, note: withNote } : { index });
     };
 
@@ -192,7 +192,7 @@ export function pickFromList(title: string, items: PickItem[], options: { initia
         const detail = item.detail ? clip(sanitize(item.detail), Math.max(0, width - labelWidth - 6)) : '';
         lines.push(
           start + i === selected
-            ? `${style.cyan('❯')} ${style.cyan(style.bold(label))}  ${detail}`.trimEnd()
+            ? `${style.accent('❯')} ${style.accent(style.bold(label))}  ${detail}`.trimEnd()
             : `  ${label}  ${style.dim(detail)}`.trimEnd(),
         );
       });
@@ -206,7 +206,7 @@ export function pickFromList(title: string, items: PickItem[], options: { initia
 
     const finish = (value: string | null, label?: string): void => {
       release();
-      out.write(`\r${drawn > 1 ? `\x1b[${drawn - 1}A` : ''}\x1b[0J${style.bold(sanitize(title))} ${value === null ? style.dim('cancelled') : style.cyan(sanitize(label ?? value))}\n\x1b[?25h`);
+      out.write(`\r${drawn > 1 ? `\x1b[${drawn - 1}A` : ''}\x1b[0J${style.bold(sanitize(title))} ${value === null ? style.dim('cancelled') : style.accent(sanitize(label ?? value))}\n\x1b[?25h`);
       resolve(value);
     };
 

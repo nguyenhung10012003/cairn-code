@@ -53,6 +53,11 @@ export interface FooterOptions {
   onPaste?: (text: string) => string | undefined;
 }
 
+/** The status dimmed, except a spinner frame at its start, which shows the work is running. */
+function paintStatus(text: string): string {
+  return /^[\u2800-\u28ff]/.test(text) ? `${style.accent(text[0]!)}${style.dim(text.slice(1))}` : style.dim(text);
+}
+
 function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
 }
@@ -201,7 +206,7 @@ export class Footer {
     const above = this.options.above(width).map((line) => clipLine(line, usable));
     const { rows, row, col } = this.layout(usable);
     const menu = this.menu.lines(width);
-    const rule = style.dim('─'.repeat(usable));
+    const rule = style.border('─'.repeat(usable));
     // A rule above and below the input sets it apart from the output and from the menu and status.
     const lines = [...above, rule, ...rows, rule, ...menu, this.statusLine(usable)];
     const cursorRow = above.length + 1 + row;
@@ -221,9 +226,9 @@ export class Footer {
     const left = sanitize(this.options.status(usable));
     const right = sanitize(this.options.statusRight?.() ?? '');
     const room = usable - displayWidth(right) - 2;
-    if (!right || room < Math.min(displayWidth(left), 24)) return style.dim(clipToWidth(left, usable));
+    if (!right || room < Math.min(displayWidth(left), 24)) return paintStatus(clipToWidth(left, usable));
     const shown = clipToWidth(left, room);
-    return style.dim(`${shown}${' '.repeat(usable - displayWidth(shown) - displayWidth(right))}${right}`);
+    return `${paintStatus(shown)}${' '.repeat(usable - displayWidth(shown) - displayWidth(right))}${style.dim(right)}`;
   }
 
   private eraseSequence(): string {

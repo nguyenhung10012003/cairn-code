@@ -1,20 +1,8 @@
 /** Terminal output helpers. */
 import { relative } from 'node:path';
+import { style } from './theme.ts';
 
-const useColor = process.stdout.isTTY === true && !process.env.NO_COLOR;
-
-function paint(code: string): (text: string) => string {
-  return (text) => (useColor ? `\x1b[${code}m${text}\x1b[0m` : text);
-}
-
-export const style = {
-  dim: paint('2'),
-  bold: paint('1'),
-  red: paint('31'),
-  green: paint('32'),
-  yellow: paint('33'),
-  cyan: paint('36'),
-};
+export { style };
 
 /** Columns a character takes. Over-counting is safe for layout; under-counting would wrap a line. */
 export function charWidth(code: number): number {
@@ -117,12 +105,50 @@ export function sanitize(text: string): string {
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
 }
 
+/** Links, bold, strikethrough and italics. Markers inside words, as in snake_case or 2*3*4, are left alone. */
+function formatEmphasis(text: string): string {
+  return text
+    .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_m, label: string, url: string) =>
+      label === url ? style.link(url) : `${style.link(label)} ${style.dim(`(${url})`)}`,
+    )
+    .replace(/\*\*(?=\S)(.+?)(?<=\S)\*\*/g, (_m, inner: string) => style.bold(inner))
+    .replace(/(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)/g, (_m, inner: string) => style.bold(inner))
+    .replace(/~~(?=\S)(.+?)(?<=\S)~~/g, (_m, inner: string) => style.strike(inner))
+    .replace(/(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])/g, (_m, inner: string) => style.italic(inner))
+    .replace(/(?<![\w_])_(?=[^\s_])(.+?)(?<=[^\s_])_(?![\w_])/g, (_m, inner: string) => style.italic(inner));
+}
+
+/** Code spans first, so nothing inside one is read as emphasis. */
+function formatInline(text: string): string {
+  return text
+    .split(/(`[^`]+`)/)
+    .map((part, i) => (i % 2 === 1 ? style.code(part.slice(1, -1)) : formatEmphasis(part)))
+    .join('');
+}
+
 function formatLine(line: string): string {
   const heading = /^(#{1,6})\s+(.*)$/.exec(line);
-  if (heading) return style.bold(heading[2]!);
-  return line
-    .replace(/\*\*([^*]+)\*\*/g, (_m, text: string) => style.bold(text))
-    .replace(/`([^`]+)`/g, (_m, text: string) => style.cyan(text));
+  if (heading) {
+    const text = formatInline(heading[2]!);
+    const level = heading[1]!.length;
+    return level === 1 ? style.underline(style.heading(text)) : level === 2 ? style.heading(text) : style.bold(text);
+  }
+  if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) return style.border('─'.repeat(Math.min(60, (process.stdout.columns || 80) - 1)));
+  const task = /^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$/.exec(line);
+  if (task) {
+    const done = task[2] !== ' ';
+    return `${task[1]}${done ? style.success('☑') : style.dim('☐')} ${done ? style.dim(formatInline(task[3]!)) : formatInline(task[3]!)}`;
+  }
+  const bullet = /^(\s*)[-*+]\s+(.*)$/.exec(line);
+  if (bullet) return `${bullet[1]}${style.accent(bullet[1]!.length >= 2 ? '◦' : '•')} ${formatInline(bullet[2]!)}`;
+  const ordered = /^(\s*)(\d+[.)])\s+(.*)$/.exec(line);
+  if (ordered) return `${ordered[1]}${style.accent(ordered[2]!)} ${formatInline(ordered[3]!)}`;
+  const quote = /^(\s*)>\s?(.*)$/.exec(line);
+  if (quote) return `${quote[1]}${style.border('│')} ${style.italic(formatInline(quote[2]!))}`;
+  // A table: the row of dashes under its header, and the pipes between its cells, step back.
+  if (/^\s*\|?(?:\s*:?-+:?\s*\|)+\s*:?-*:?\s*$/.test(line)) return style.dim(line);
+  if (/^\s*\|.*\|\s*$/.test(line)) return line.split('|').map(formatInline).join(style.dim('|'));
+  return formatInline(line);
 }
 
 /** Styles Markdown a line at a time, while text is still arriving from the model. */
@@ -155,7 +181,7 @@ export class MarkdownStream {
       this.inFence = !this.inFence;
       this.write(`${style.dim(line)}\n`);
     } else {
-      this.write(`${this.inFence ? style.cyan(line) : formatLine(line)}\n`);
+      this.write(`${this.inFence ? style.codeBlock(line) : formatLine(line)}\n`);
     }
   }
 }
@@ -209,16 +235,16 @@ export function permissionPreview(name: string, input: Record<string, unknown>):
       return clip(String(input.command ?? ''), '');
     case 'Edit':
       return [
-        `  ${sanitize(String(input.file_path ?? ''))}`,
-        ...clip(String(input.old_string ?? ''), '- ').map(style.red),
-        ...clip(String(input.new_string ?? ''), '+ ').map(style.green),
+        style.bold(`  ${sanitize(String(input.file_path ?? ''))}`),
+        ...clip(String(input.old_string ?? ''), '- ').map(style.error),
+        ...clip(String(input.new_string ?? ''), '+ ').map(style.success),
       ];
     case 'Write':
-      return [`  ${sanitize(String(input.file_path ?? ''))}`, ...clip(String(input.content ?? ''), '+ ').map(style.green)];
+      return [style.bold(`  ${sanitize(String(input.file_path ?? ''))}`), ...clip(String(input.content ?? ''), '+ ').map(style.success)];
     case 'Read':
-      return [`  ${sanitize(String(input.file_path ?? ''))}`];
+      return [style.bold(`  ${sanitize(String(input.file_path ?? ''))}`)];
     case 'WebFetch':
-      return [`  ${sanitize(String(input.url ?? ''))}`];
+      return [style.info(`  ${sanitize(String(input.url ?? ''))}`)];
     default:
       return clip(JSON.stringify(input, null, 2), '');
   }
@@ -228,7 +254,7 @@ export function toolResultSummary(output: string, display: string | undefined, i
   if (isError) {
     const lines = sanitize(output).trim().split('\n');
     const shown = lines.slice(0, 6).join('\n     ');
-    return style.red(lines.length > 6 ? `${shown}\n     … ${lines.length - 6} more lines` : shown);
+    return style.error(lines.length > 6 ? `${shown}\n     … ${lines.length - 6} more lines` : shown);
   }
   if (display) return style.dim(sanitize(display));
   const lines = sanitize(output).trimEnd().split('\n');
@@ -246,7 +272,7 @@ export class Spinner {
     if (this.timer || !process.stdout.isTTY) return;
     this.timer = setInterval(() => {
       this.frame = (this.frame + 1) % FRAMES.length;
-      process.stdout.write(`\r\x1b[2K${style.dim(`${FRAMES[this.frame]} ${label}`)}`);
+      process.stdout.write(`\r\x1b[2K${style.accent(FRAMES[this.frame]!)} ${style.dim(label)}`);
     }, 100);
   }
 

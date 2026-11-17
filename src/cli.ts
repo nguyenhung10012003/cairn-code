@@ -243,7 +243,7 @@ async function main(): Promise<number> {
   }
   // Before anything creates Karst's own home, which is what makes this show only once.
   const legacyHint = legacyHomeHint();
-  if (legacyHint) process.stderr.write(`${style.cyan(legacyHint)}\n`);
+  if (legacyHint) process.stderr.write(`${style.accent(legacyHint)}\n`);
 
   const fail = (message: string): number => {
     process.stderr.write(`${message}\n`);
@@ -407,7 +407,7 @@ async function main(): Promise<number> {
     void checkForUpdate({
       updateCheck: runtime.settings.updateCheck,
       autoUpdates: runtime.settings.autoUpdates,
-      report: (text) => terminal.print(`${style.cyan(sanitize(text))}\n`),
+      report: (text) => terminal.print(`${style.accent(sanitize(text))}\n`),
       signal: updates.signal,
     });
     try {

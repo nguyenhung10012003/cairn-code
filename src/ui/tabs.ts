@@ -59,11 +59,11 @@ export function showTabs(title: string, tabs: TabPage[], options: TabViewOptions
       // The same width selected or not, so the bar does not shift when the selection moves.
       const labels = tabs.map((tab, i) => (i === current ? `[ ${sanitize(tab.title)} ]` : `  ${sanitize(tab.title)}  `));
       if (displayWidth(` ${title}   ${labels.join(' ')}`) <= usable) {
-        const shown = labels.map((label, i) => (i === current ? style.cyan(style.bold(label)) : style.dim(label)));
+        const shown = labels.map((label, i) => (i === current ? style.accent(style.bold(label)) : style.dim(label)));
         return ` ${style.bold(sanitize(title))}   ${shown.join(' ')}`;
       }
       // Too narrow for every tab: the current one, and where it is among them.
-      return style.cyan(style.bold(clipToWidth(` ‹ ${sanitize(tabs[current]!.title)} › ${current + 1}/${tabs.length}`, usable)));
+      return style.accent(style.bold(clipToWidth(` ‹ ${sanitize(tabs[current]!.title)} › ${current + 1}/${tabs.length}`, usable)));
     };
 
     const render = (): void => {
@@ -77,7 +77,7 @@ export function showTabs(title: string, tabs: TabPage[], options: TabViewOptions
         const line = lines[offset + i];
         rows.push(line ? clipToWidth(` ${line}`, usable) : '');
       }
-      if (notice) rows.push(style.yellow(clipToWidth(sanitize(notice), usable)));
+      if (notice) rows.push(style.warning(clipToWidth(sanitize(notice), usable)));
       const scrolls = lines.length > body;
       const position = scrolls ? `${offset + 1}-${Math.min(lines.length, offset + body)} of ${lines.length} · ` : '';
       rows.push(style.dim(clipToWidth(` ${position}←→ switch tab · ${scrolls ? '↑↓ scroll · ' : ''}Esc back`, usable)));

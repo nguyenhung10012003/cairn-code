@@ -11,6 +11,7 @@ import type { InstructionFile } from '../core/instructions.ts';
 import type { Runtime } from '../core/runtime.ts';
 import { pasteImageKey } from './clipboard.ts';
 import { clipToWidth, displayWidth, sanitize, style, tailToWidth, wrapToWidth } from './render.ts';
+import { gradient } from './theme.ts';
 
 export interface WelcomeRow {
   label: string;
@@ -127,6 +128,20 @@ function tipsLine(room: number): string {
   return line;
 }
 
+/** A tips line with each tip's key, such as `/help` or `Shift+Tab`, picked out. */
+function paintTips(line: string): string {
+  return line
+    .split(' · ')
+    .map((tip) => {
+      const space = tip.indexOf(' ');
+      return space === -1 ? style.accent(tip) : `${style.accent(tip.slice(0, space))}${style.dim(tip.slice(space))}`;
+    })
+    .join(style.dim(' · '));
+}
+
+/** The ` · ` between the parts of a value, stepped back so the parts stand out. */
+const paintValue = (value: string): string => value.split(' · ').join(style.dim(' · '));
+
 /** The panel as lines no wider than `width` columns. */
 export function renderWelcome(rows: WelcomeRow[], width: number): string[] {
   const title = `✻ ${APP_DISPLAY_NAME} v${VERSION}`;
@@ -135,13 +150,13 @@ export function renderWelcome(rows: WelcomeRow[], width: number): string[] {
   if (usable < MIN_BOX_WIDTH) {
     // Too narrow for a box: a row on one line when it fits, else its value on the lines after.
     return [
-      style.bold(style.cyan(clipToWidth(title, usable))),
+      gradient(clipToWidth(title, usable)),
       ...rows.flatMap((row) => {
         const label = `${row.label}: `;
-        if (displayWidth(label) + displayWidth(row.value) <= usable) return [`${style.dim(label)}${row.value}`];
-        return [style.dim(row.label), ...valueLines(row, usable - 2).map((line) => `  ${line}`)];
+        if (displayWidth(label) + displayWidth(row.value) <= usable) return [`${style.dim(label)}${paintValue(row.value)}`];
+        return [style.dim(row.label), ...valueLines(row, usable - 2).map((line) => `  ${paintValue(line)}`)];
       }),
-      style.dim(tipsLine(usable)),
+      paintTips(tipsLine(usable)),
     ];
   }
   const natural = Math.max(
@@ -152,19 +167,19 @@ export function renderWelcome(rows: WelcomeRow[], width: number): string[] {
   // Two columns of border and two of padding on each side.
   const inner = Math.min(natural, usable - 6, MAX_INNER_WIDTH);
   const boxed = (content: string, contentWidth: number): string =>
-    `${style.dim('│')}  ${content}${' '.repeat(Math.max(0, inner - contentWidth))}  ${style.dim('│')}`;
+    `${style.border('│')}  ${content}${' '.repeat(Math.max(0, inner - contentWidth))}  ${style.border('│')}`;
   const lines = [
-    `${style.dim('╭─ ')}${style.bold(style.cyan(title))}${style.dim(` ${'─'.repeat(Math.max(1, inner + 1 - displayWidth(title)))}╮`)}`,
+    `${style.border('╭─ ')}${gradient(title)}${style.border(` ${'─'.repeat(Math.max(1, inner + 1 - displayWidth(title)))}╮`)}`,
     boxed('', 0),
   ];
   const room = inner - labelWidth - 2;
   for (const row of rows) {
     valueLines(row, room).forEach((piece, i) => {
       const label = i === 0 ? style.dim(row.label.padEnd(labelWidth)) : ' '.repeat(labelWidth);
-      lines.push(boxed(`${label}  ${piece}`, labelWidth + 2 + displayWidth(piece)));
+      lines.push(boxed(`${label}  ${paintValue(piece)}`, labelWidth + 2 + displayWidth(piece)));
     });
   }
   const tips = tipsLine(inner);
-  lines.push(boxed('', 0), boxed(style.dim(tips), displayWidth(tips)), style.dim(`╰${'─'.repeat(inner + 4)}╯`));
+  lines.push(boxed('', 0), boxed(paintTips(tips), displayWidth(tips)), style.border(`╰${'─'.repeat(inner + 4)}╯`));
   return lines;
 }

@@ -24,6 +24,7 @@ import { chooseWithNote, pickFromList, readSecret } from './picker.ts';
 import type { ChoiceOption } from './picker.ts';
 import { clipToWidth, displayWidth, MarkdownStream, permissionPreview, sanitize, style, toolResultSummary, toolSummary, wrapToWidth } from './render.ts';
 import { showTabs } from './tabs.ts';
+import { modeStyle } from './theme.ts';
 import { renderWelcome, welcomeRows } from './welcome.ts';
 
 const stdin = process.stdin;
@@ -108,7 +109,7 @@ class TerminalPrompter implements Prompter {
     return this.asking(async () => {
       const block = new ScreenBlock();
       block.write('');
-      block.write(style.yellow(style.bold(`${prompt.toolName} needs your approval`)));
+      block.write(style.warning(style.bold(`◆ ${prompt.toolName} needs your approval`)));
       for (const line of permissionPreview(prompt.toolName, prompt.input)) block.write(line);
       block.write(style.dim(sanitize(prompt.reason)));
       const canAlways = !prompt.forced && prompt.suggestions.length > 0;
@@ -138,7 +139,7 @@ class TerminalPrompter implements Prompter {
         // A note goes into the call's result, which shows it. A new rule is shown nowhere else.
         const erased = block.erase(1, block.rows + options.length + 1);
         if (erased && answer.always) {
-          stdout.write(`${style.dim(clipToWidth(`  ✓ Approved; won't ask again for ${sanitize(rules)} (${where})`, (stdout.columns || 80) - 1))}\n`);
+          stdout.write(`${style.success('  ✓')}${style.dim(clipToWidth(` Approved; won't ask again for ${sanitize(rules)} (${where})`, (stdout.columns || 80) - 4))}\n`);
         }
       }
       return choice.note ? { ...answer, feedback: choice.note } : answer;
@@ -163,7 +164,7 @@ class TerminalPrompter implements Prompter {
         stdout.write(`\n${style.bold(sanitize(question.question))}\n`);
         question.options.forEach((option, i) => {
           const description = option.description ? style.dim(` - ${sanitize(option.description)}`) : '';
-          stdout.write(`  ${i + 1}. ${sanitize(option.label)}${description}\n`);
+          stdout.write(`  ${style.accent(`${i + 1}.`)} ${sanitize(option.label)}${description}\n`);
         });
         const hint = question.multiSelect ? 'Numbers separated by commas, or your own answer: ' : 'Number, or your own answer: ';
         const raw = (await this.input.read(hint))?.trim() ?? '';
@@ -177,7 +178,11 @@ class TerminalPrompter implements Prompter {
 
   approvePlan(plan: string): Promise<boolean> {
     return this.asking(async () => {
-      stdout.write(`\n${style.bold('Proposed plan')}\n${sanitize(plan)}\n\n`);
+      stdout.write(`\n${style.heading('Proposed plan')}\n`);
+      const md = new MarkdownStream((text) => stdout.write(text));
+      md.push(plan);
+      md.flush();
+      stdout.write('\n');
       const answer = (await this.input.read('Approve and start? [y/N]: '))?.trim().toLowerCase();
       return answer === 'y' || answer === 'yes';
     });
@@ -234,7 +239,7 @@ class ThinkingView {
     const ms = Date.now() - this.startedAt;
     this.tail = '';
     this.startedAt = null;
-    this.print(`${style.dim(`✻ Thought for ${ms < 1000 ? 'less than a second' : duration(ms)}`)}\n`);
+    this.print(`${style.secondary('✻')} ${style.dim(`Thought for ${ms < 1000 ? 'less than a second' : duration(ms)}`)}\n`);
   }
 
   lines(width: number): string[] {
@@ -245,7 +250,7 @@ class ThinkingView {
     for (let i = lines.length - 1; i >= 0 && rows.length < THINKING_ROWS; i--) {
       if (lines[i]!.trim()) rows.unshift(...wrapToWidth(lines[i]!.trimEnd(), room));
     }
-    return [style.dim('✻ Thinking…'), ...rows.slice(-THINKING_ROWS).map((row) => style.dim(`  ${row}`))];
+    return [`${style.secondary('✻')} ${style.dim('Thinking…')}`, ...rows.slice(-THINKING_ROWS).map((row) => style.thinking(`  ${row}`))];
   }
 }
 
@@ -260,12 +265,12 @@ function renderEvent(event: AgentEvent, runtime: Runtime, md: MarkdownStream, th
       break;
     case 'server_tool':
       md.flush();
-      print(`${style.cyan('●')} ${style.bold(sanitize(event.name))}${event.summary ? style.dim(`(${sanitize(event.summary)})`) : ''}\n`);
+      print(`${style.info('●')} ${style.bold(sanitize(event.name))}${event.summary ? style.dim(`(${sanitize(event.summary)})`) : ''}\n`);
       break;
     case 'tool_start': {
       md.flush();
       const summary = toolSummary(event.name, event.input, runtime.context.cwd());
-      print(`${style.cyan('●')} ${style.bold(event.name)}${summary ? style.dim(`(${summary})`) : ''}\n`);
+      print(`${style.accent('●')} ${style.bold(event.name)}${summary ? style.dim(`(${summary})`) : ''}\n`);
       break;
     }
     case 'tool_end':
@@ -273,7 +278,7 @@ function renderEvent(event: AgentEvent, runtime: Runtime, md: MarkdownStream, th
       break;
     case 'notice':
       md.flush();
-      print(`${event.level === 'warn' ? style.yellow('! ') : ''}${sanitize(event.text)}\n`);
+      print(`${event.level === 'warn' ? style.warning(style.bold('! ')) : ''}${sanitize(event.text)}\n`);
       break;
     case 'compacted':
       md.flush();
@@ -283,8 +288,8 @@ function renderEvent(event: AgentEvent, runtime: Runtime, md: MarkdownStream, th
       break;
     case 'turn_end':
       md.flush();
-      if (event.stopReason === 'interrupted') print(`${style.yellow('Interrupted.')}\n`);
-      if (event.stopReason === 'error') print(`${style.red(`Error: ${sanitize(event.error ?? 'unknown')}`)}\n`);
+      if (event.stopReason === 'interrupted') print(`${style.warning('■ Interrupted.')}\n`);
+      if (event.stopReason === 'error') print(`${style.error(`✗ Error: ${sanitize(event.error ?? 'unknown')}`)}\n`);
       break;
   }
 }
@@ -369,8 +374,8 @@ const plural = (count: number, word: string): string => `${count} ${word}${count
 
 /** What the user typed, as it appears in the conversation above the prompt. */
 function echo(text: string): string {
-  const [first, ...rest] = markPlaceholders(sanitize(text), style.cyan).split('\n');
-  return `${style.cyan('>')} ${first}${rest.map((line) => `\n  ${line}`).join('')}\n`;
+  const [first, ...rest] = markPlaceholders(sanitize(text), style.accent).split('\n');
+  return `${style.accent('❯')} ${first}${rest.map((line) => `\n  ${line}`).join('')}\n`;
 }
 
 export async function runRepl(runtime: Runtime, terminal: Terminal, initialPrompt?: string): Promise<void> {
@@ -382,7 +387,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
   const { input, prompter } = terminal;
   const promptText = (): string => {
     const mode = runtime.engine.mode;
-    return `${mode === 'default' ? '' : style.yellow(`[${mode}] `)}${style.cyan('>')} `;
+    return `${mode === 'default' ? '' : `${modeStyle(mode)(`[${mode}]`)} `}${style.accent('❯')} `;
   };
 
   if (stdout.isTTY) {
@@ -393,9 +398,9 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
   /** The opening panel, worked out again each time it is drawn, since /clear changes the session. */
   const welcome = (): string => `${renderWelcome(welcomeRows(runtime), stdout.columns || 80).join('\n')}\n`;
   stdout.write(welcome());
-  for (const warning of runtime.warnings) stdout.write(`${style.yellow('! ')}${sanitize(warning)}\n`);
+  for (const warning of runtime.warnings) stdout.write(`${style.warning(style.bold('! '))}${sanitize(warning)}\n`);
   if (runtime.engine.mode === 'bypassPermissions') {
-    stdout.write(`${style.red('! bypassPermissions: tools run without asking. Use this only in an isolated environment.')}\n`);
+    stdout.write(`${style.error(style.bold('! bypassPermissions: tools run without asking. Use this only in an isolated environment.'))}\n`);
   }
   stdout.write('\n');
 
@@ -506,7 +511,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     for (const { path, label } of sources) {
       const loaded = await loadImage(path, label, new AbortController().signal);
       if (!loaded.ok) {
-        print(`${style.yellow(`! ${sanitize(loaded.message)}`)}\n`);
+        print(`${style.warning(`! ${sanitize(loaded.message)}`)}\n`);
         placeholders.push(null);
         continue;
       }
@@ -534,7 +539,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
         await clip.cleanup();
       }
     } catch (error) {
-      print(`${style.red(`Could not paste the image: ${sanitize((error as Error).message)}`)}\n`);
+      print(`${style.error(`Could not paste the image: ${sanitize((error as Error).message)}`)}\n`);
     } finally {
       attaching--;
       footer.render();
@@ -550,7 +555,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
       const quoted = (path: string): string => (/[\s'"\\]/.test(path) ? `'${path.replace(/'/g, `'\\''`)}'` : path);
       insertAtCursor(placeholders.map((placeholder, i) => placeholder ?? quoted(paths[i]!)));
     } catch (error) {
-      print(`${style.red(`Could not attach the images: ${sanitize((error as Error).message)}`)}\n`);
+      print(`${style.error(`Could not attach the images: ${sanitize((error as Error).message)}`)}\n`);
       footer.editor.insert(paths.join(' '));
     } finally {
       attaching--;
@@ -598,7 +603,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
         scheduled--;
         if (!exiting) await work();
       })
-      .catch((error: unknown) => print(`${style.red(sanitize((error as Error).message))}\n`));
+      .catch((error: unknown) => print(`${style.error(sanitize((error as Error).message))}\n`));
   };
 
   const runBusy = async (label: string, work: (signal: AbortSignal) => Promise<void>): Promise<void> => {
@@ -608,7 +613,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     try {
       await work(controller.signal);
     } catch (error) {
-      print(`${style.red(sanitize((error as Error).message))}\n`);
+      print(`${style.error(sanitize((error as Error).message))}\n`);
     } finally {
       busy = null;
       footer.render();
@@ -633,13 +638,13 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
       try {
         await streamEvents(events(signal));
       } catch (error) {
-        print(`${style.red(sanitize((error as Error).message))}\n`);
+        print(`${style.error(sanitize((error as Error).message))}\n`);
       }
       const summary = turnSummary(before, spentBy(runtime.agent), Date.now() - startedAt);
       if (!summary) return;
-      print(`\n${style.dim(`▸ ${summary}`)}\n`);
+      print(`\n${style.accent('▸')} ${style.dim(summary)}\n`);
       const hint = compactHint(runtime);
-      if (hint) print(`${style.yellow(`! ${hint}`)}\n`);
+      if (hint) print(`${style.warning(`! ${hint}`)}\n`);
     });
   const runTurn = (text: string, activation?: SkillActivation, images: ImageBlock[] = []): Promise<void> =>
     runAgent((signal) => runtime.agent.run(text, signal, activation, images.length > 0 ? { images } : {}));
@@ -730,7 +735,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
         else await runBusy('Working', async (signal) => void (result = await settleCommand(started, signal)));
       }
     } catch (error) {
-      print(`${style.red(sanitize((error as Error).message))}\n`);
+      print(`${style.error(sanitize((error as Error).message))}\n`);
       return;
     }
     // The screen, then the scrollback (which some terminals fill with what the first wipe
@@ -746,7 +751,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
           await runtime.agent.compact(focus ?? '', signal);
           print(`${style.dim('Conversation compacted.')}\n`);
         } catch (error) {
-          print(`${style.red(`Compaction failed: ${sanitize((error as Error).message)}`)}\n`);
+          print(`${style.error(`Compaction failed: ${sanitize((error as Error).message)}`)}\n`);
         }
       });
     }

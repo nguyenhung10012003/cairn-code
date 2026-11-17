@@ -62,7 +62,7 @@ export function renderMenu(items: CommandEntry[], selected: number, columns: num
   const lines = visible.map((entry, i) => {
     const name = pad(clip(labels[i]!, nameWidth), nameWidth);
     const description = clip(sanitize(entry.description).replace(/\s+/g, ' ').trim(), descriptionWidth);
-    if (start + i === selected) return `${style.cyan('❯')} ${style.cyan(style.bold(name))}  ${description}`.trimEnd();
+    if (start + i === selected) return `${style.accent('❯')} ${style.accent(style.bold(name))}  ${description}`.trimEnd();
     return `  ${name}  ${style.dim(description)}`.trimEnd();
   });
   if (items.length > MENU_ROWS) lines.push(style.dim(`  ${selected + 1}/${items.length}`));
