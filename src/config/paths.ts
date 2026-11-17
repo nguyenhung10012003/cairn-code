@@ -10,7 +10,7 @@ export const INSTRUCTION_FILE = 'KARST.md';
 export const LOCAL_INSTRUCTION_FILE = 'KARST.local.md';
 /** Checked in order when a directory has no INSTRUCTION_FILE, so existing repos work unchanged. */
 export const FALLBACK_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'];
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 /** The package on npm, which update checks ask about and `karst update` installs. */
 export const NPM_PACKAGE = 'karst-code';
 
