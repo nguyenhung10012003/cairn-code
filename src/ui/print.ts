@@ -1,4 +1,5 @@
 /** Non-interactive mode: one prompt in, one result out, for scripts and pipelines. */
+import { createInterface } from 'node:readline';
 import { parseSlash, resolveExtensionCommand, settleCommand } from '../commands/slash.ts';
 import type { AgentEvent } from '../core/agent.ts';
 import type { ContentBlock, Message } from '../core/messages.ts';
@@ -86,18 +87,16 @@ function isTypedPrompt(message: Message): boolean {
   return message.role === 'user' && message.content.every((block) => block.type === 'text' || block.type === 'image');
 }
 
+/**
+ * Through readline rather than `for await` on stdin: under Bun on Linux, iterating a piped stdin
+ * yields nothing once chalk's color detection has read `process.env`.
+ */
 async function* readInputLines(): AsyncGenerator<string> {
-  let buffered = '';
-  for await (const chunk of process.stdin) {
-    buffered += (chunk as Buffer).toString('utf8');
-    let newline: number;
-    while ((newline = buffered.indexOf('\n')) !== -1) {
-      const line = buffered.slice(0, newline).trim();
-      buffered = buffered.slice(newline + 1);
-      if (line) yield line;
-    }
+  const lines = createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY });
+  for await (const raw of lines) {
+    const line = raw.trim();
+    if (line) yield line;
   }
-  if (buffered.trim()) yield buffered.trim();
 }
 
 /** `{"type":"user","message":{"role":"user","content":"..."}}`, with text content only. */

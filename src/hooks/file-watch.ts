@@ -1,23 +1,32 @@
 /**
  * Watches the files that FileChanged hooks name, and reports each change once things settle.
- * A directory is watched rather than the file, so a file that is created, or replaced by an
- * editor writing a new copy and renaming it, is still seen.
+ * Each file is polled with `watchFile` rather than watched with `fs.watch`: Bun's `fs.watch` on
+ * Linux reports nothing for a file whose name starts with a dot, such as `.envrc`, and polling
+ * also sees a file that is created, or replaced by an editor writing a copy and renaming it.
  */
-import { existsSync, watch } from 'node:fs';
-import type { FSWatcher } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import { statSync, unwatchFile, watchFile } from 'node:fs';
 
 export type FileEvent = 'change' | 'add' | 'unlink';
 
+const POLL_MS = 250;
 /** Editors write a file in several steps; one report follows the last of them. */
 const SETTLE_MS = 100;
 
+/** What tells one version of a file from another, or null when it is not there. */
+function signature(path: string): string | null {
+  try {
+    const info = statSync(path);
+    return `${info.mtimeMs}:${info.size}:${info.ino}`;
+  } catch {
+    return null;
+  }
+}
+
 export class FileWatcher {
   private readonly onChange: (path: string, event: FileEvent) => void;
-  private readonly watchers = new Map<string, FSWatcher>();
   private readonly pending = new Map<string, NodeJS.Timeout>();
-  /** Whether each watched file existed when last seen, to tell a creation from a change. */
-  private readonly present = new Map<string, boolean>();
+  /** How each watched file was when last reported, to tell a creation from a change, and a change from nothing. */
+  private readonly seen = new Map<string, string | null>();
   private paths = new Set<string>();
 
   constructor(onChange: (path: string, event: FileEvent) => void) {
@@ -26,30 +35,21 @@ export class FileWatcher {
 
   /** Watches exactly these absolute paths from now on. */
   setPaths(paths: Iterable<string>): void {
-    this.paths = new Set(paths);
-    const dirs = new Set([...this.paths].map((path) => dirname(path)));
-    for (const [dir, watcher] of this.watchers) {
-      if (dirs.has(dir)) continue;
-      watcher.close();
-      this.watchers.delete(dir);
+    const next = new Set(paths);
+    for (const path of this.paths) {
+      if (next.has(path)) continue;
+      unwatchFile(path);
+      clearTimeout(this.pending.get(path));
+      this.pending.delete(path);
+      this.seen.delete(path);
     }
-    for (const path of this.paths) if (!this.present.has(path)) this.present.set(path, existsSync(path));
-    for (const dir of dirs) {
-      if (this.watchers.has(dir)) continue;
-      try {
-        // Not persistent: watching files must not keep a finished session running.
-        const watcher = watch(dir, { persistent: false }, (_type, name) => {
-          if (name !== null) this.touched(`${dir}/${basename(name.toString())}`);
-        });
-        watcher.on('error', () => {
-          watcher.close();
-          this.watchers.delete(dir);
-        });
-        this.watchers.set(dir, watcher);
-      } catch {
-        // A directory that does not exist yet cannot be watched; nothing in it is reported.
-      }
+    for (const path of next) {
+      if (this.paths.has(path)) continue;
+      this.seen.set(path, signature(path));
+      // Not persistent: watching files must not keep a finished session running.
+      watchFile(path, { interval: POLL_MS, persistent: false }, () => this.touched(path));
     }
+    this.paths = next;
   }
 
   private touched(path: string): void {
@@ -59,18 +59,18 @@ export class FileWatcher {
       path,
       setTimeout(() => {
         this.pending.delete(path);
-        const was = this.present.get(path) ?? false;
-        const is = existsSync(path);
-        this.present.set(path, is);
-        if (!was && !is) return;
-        this.onChange(path, !is ? 'unlink' : was ? 'change' : 'add');
+        const was = this.seen.get(path) ?? null;
+        const is = signature(path);
+        if (was === is) return;
+        this.seen.set(path, is);
+        this.onChange(path, is === null ? 'unlink' : was === null ? 'add' : 'change');
       }, SETTLE_MS).unref(),
     );
   }
 
   close(): void {
-    for (const watcher of this.watchers.values()) watcher.close();
-    this.watchers.clear();
+    for (const path of this.paths) unwatchFile(path);
+    this.paths.clear();
     for (const timer of this.pending.values()) clearTimeout(timer);
     this.pending.clear();
   }

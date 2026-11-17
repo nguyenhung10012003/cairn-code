@@ -65,10 +65,14 @@ function parseTokens(value: string | undefined, label: string): number | undefin
   return parsed;
 }
 
-async function readAllStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString('utf8').trim();
+/** Through events rather than `for await`, which under Bun on Linux can yield nothing from a pipe. */
+function readAllStdin(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    process.stdin.on('data', (chunk: Buffer) => chunks.push(chunk));
+    process.stdin.once('end', () => resolve(Buffer.concat(chunks).toString('utf8').trim()));
+    process.stdin.once('error', reject);
+  });
 }
 
 function loadConfigs(cwd: string): { providers: Record<string, ProviderConfig>; defaultProvider: string; warnings: string[] } {
