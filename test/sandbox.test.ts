@@ -7,10 +7,13 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, it } from 'bun:test';
+import { loadSettings } from '../src/config/settings.ts';
 import { PermissionEngine } from '../src/permissions/engine.ts';
+import { networkQuestion } from '../src/sandbox/ask.ts';
 import { hostDecision, isLocalAddress } from '../src/sandbox/proxy.ts';
 import { bubblewrapArgs, createSandbox, globToSeatbeltRegex, mergeSandboxSettings, seatbeltProfile } from '../src/sandbox/sandbox.ts';
 import type { Sandbox, SandboxSettings } from '../src/sandbox/sandbox.ts';
+import type { PermissionAnswer, PermissionPrompt, Prompter } from '../src/tools/types.ts';
 
 const isMac = process.platform === 'darwin';
 
@@ -206,6 +209,37 @@ describe.skipIf(!isMac)('the network proxy', () => {
     await sandbox.close();
   });
 
+  it('asks about a host neither list names, once per host, and never about a denied one', async () => {
+    const dir = tempDir();
+    const asked: string[] = [];
+    let allow = true;
+    const askNetwork = async (host: string, port: number): Promise<boolean> => {
+      asked.push(`${host}:${port}`);
+      return allow;
+    };
+    const { sandbox } = await createSandbox({ enabled: true, network: { deniedDomains: ['localhost'] } }, { cwd: dir, workingDirs: () => [dir], askNetwork });
+    assert.ok(sandbox, 'the proxy runs with no domain allowed, so a command can ask for one');
+    const reached = await runAsync(sandbox, dir, `curl -sS --max-time 5 http://127.0.0.1:${port}/; curl -sS --max-time 5 http://127.0.0.1:${port}/`);
+    assert.equal(reached.stdout, 'reachedreached', reached.stderr);
+    assert.deepEqual(asked, [`127.0.0.1:${port}`], 'the second request used the first answer');
+    const denied = await runAsync(sandbox, dir, `curl -sS --max-time 5 http://localhost:${port}/`);
+    assert.match(denied.stdout, /deniedDomains names it/);
+    assert.equal(asked.length, 1);
+    await sandbox.close();
+
+    allow = false;
+    const { sandbox: refusing } = await createSandbox({ enabled: true }, { cwd: dir, workingDirs: () => [dir], askNetwork });
+    const refused = await runAsync(refusing!, dir, `curl -sS --max-time 5 http://127.0.0.1:${port}/`);
+    assert.match(refused.stdout, /The user declined it/);
+    await refusing!.close();
+
+    const { sandbox: quiet } = await createSandbox({ enabled: true, network: { askForUnknownDomains: false } }, { cwd: dir, workingDirs: () => [dir], askNetwork });
+    const silent = await runAsync(quiet!, dir, `curl -sS --max-time 3 http://127.0.0.1:${port}/`);
+    assert.notEqual(silent.status, 0, 'with asking off and nothing allowed, there is no network at all');
+    await quiet!.close();
+    assert.equal(asked.length, 2);
+  });
+
   it('refuses a tunnel to a host not on the list', async () => {
     const dir = tempDir();
     const sandbox = await box(dir, { network: { allowedDomains: ['example.com'] } });
@@ -213,6 +247,32 @@ describe.skipIf(!isMac)('the network proxy', () => {
     assert.notEqual(result.status, 0);
     assert.match(result.stdout, /403/);
     await sandbox.close();
+  });
+});
+
+describe('the network question', () => {
+  it('allows for the session, saves the domain for the project on "don\'t ask again", or refuses', async () => {
+    const home = tempDir();
+    process.env.KARST_HOME = home;
+    const project = tempDir();
+    const answers: PermissionAnswer[] = [{ behavior: 'allow' }, { behavior: 'allow', always: true }, { behavior: 'deny' }];
+    const prompts: PermissionPrompt[] = [];
+    const prompter: Prompter = {
+      permission: async (prompt) => {
+        prompts.push(prompt);
+        return answers.shift()!;
+      },
+      questions: async () => null,
+      approvePlan: async () => true,
+    };
+    const ask = networkQuestion(prompter, project);
+    assert.equal(await ask('Once.example', 443), true);
+    assert.equal(loadSettings({ cwd: project, trusted: false }).sandbox.network?.allowedDomains, undefined, 'a plain yes saves nothing');
+    assert.equal(await ask('Kept.example', 443), true);
+    assert.deepEqual(loadSettings({ cwd: project, trusted: false }).sandbox.network?.allowedDomains, ['kept.example']);
+    assert.equal(await ask('no.example', 80), false);
+    assert.deepEqual(prompts[0]!.suggestions, [{ rule: 'once.example', persist: true }]);
+    assert.match(prompts[0]!.reason, /Once\.example:443/);
   });
 });
 

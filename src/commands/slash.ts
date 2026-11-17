@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { APP_DISPLAY_NAME, INSTRUCTION_FILE, projectLocalSettingsPath, projectSettingsPath, userSettingsPath, workspaceSettingsPath } from '../config/paths.ts';
-import { updateSettingsFile } from '../config/settings.ts';
+import { settingsPathFor, updateSettingsFile } from '../config/settings.ts';
 import { markTrusted } from '../config/trust.ts';
 import { ensureWorkspaceDir } from '../config/workspace.ts';
 import { renderTranscript } from '../core/compaction.ts';
@@ -12,14 +12,19 @@ import { textOf } from '../core/messages.ts';
 import type { Effort } from '../core/provider.ts';
 import type { Runtime } from '../core/runtime.ts';
 import type { McpServerState } from '../mcp/manager.ts';
+import { isRemoteSession } from '../mcp/oauth.ts';
 import { PERMISSION_MODES } from '../permissions/engine.ts';
 import type { PermissionMode } from '../permissions/engine.ts';
+import type { RewindResult } from '../session/checkpoints.ts';
+import { promptPoints } from '../session/rewind.ts';
 import { listSessions } from '../session/store.ts';
 import { sessionTotals, totalTokens } from '../session/usage.ts';
 import { splitArguments } from '../skills/skills.ts';
 import type { Skill, SkillActivation } from '../skills/skills.ts';
 import { prepareSkill, SkillError } from '../tools/skill.ts';
 import { pasteImageKey } from '../ui/clipboard.ts';
+import { KEYBINDINGS_TEMPLATE, keybindingsPath } from '../ui/keybindings.ts';
+import { currentTheme, isThemeName, setTheme, THEMES } from '../ui/theme.ts';
 import { modelCommand, providerCommand } from './provider.ts';
 import { parseUsageArgs, usageReport, usageSessions } from './usage.ts';
 import type { UsageQuery } from './usage.ts';
@@ -40,6 +45,8 @@ export interface CommandResult {
   compact?: { focus?: string };
   /** Slow work the user may want to interrupt. The UI runs it, and it leads to another result. */
   run?: (signal: AbortSignal) => Promise<CommandResult>;
+  /** Text to put on the prompt line for the user to edit, such as the message /rewind went back past. */
+  input?: string;
 }
 
 export interface PickItem {
@@ -86,6 +93,57 @@ interface BuiltinCommand {
 }
 
 const INIT_PROMPT = `Look through this repository and write a concise ${INSTRUCTION_FILE} in its root for future coding sessions. Cover the commands to build, test and lint, how to run one test, the architecture that is not obvious from a single file, and conventions a newcomer would get wrong. Leave out anything easily discovered by listing files and generic advice. If the file already exists, improve it rather than replacing it.`;
+
+/** How a review finds the change it is about, from what was typed after the command. */
+function reviewScope(args: string): string {
+  const target = args.trim();
+  if (target === '') {
+    return 'Review the changes in the working tree that are not committed yet: `git diff HEAD` for tracked files, and `git status --porcelain` to find new files, which you read in full. If there are none, say so and review the last commit (`git show HEAD`) instead.';
+  }
+  if (/^#?\d+$/.test(target) || /^https?:\/\/\S+\/pull\/\d+/.test(target)) {
+    return `Review pull request ${target}. Read its description with \`gh pr view ${target}\` and its change with \`gh pr diff ${target}\`. If gh is not installed or not signed in, say so and stop.`;
+  }
+  // Only something shaped like a git ref goes into a suggested command line.
+  if (!/^[\w./@{}-]+$/.test(target) || target.startsWith('-')) return `Review what this describes: ${target}`;
+  return `Review what the current branch changes compared with \`${target}\`: \`git diff ${target}...HEAD\`, and \`git log --oneline ${target}..HEAD\` for its commits. If \`${target}\` is not a ref git knows, treat it as a description of what to review instead.`;
+}
+
+const REVIEW_RULES = `Read the code around each change, not only the diff, as far as you need to understand what it affects: callers, tests, and the types and functions it uses. Do not change any file; this is a review.`;
+
+function reviewPrompt(args: string): string {
+  return `${reviewScope(args)}
+
+${REVIEW_RULES}
+
+Look for what would make the change wrong or risky to merge:
+- bugs: wrong logic, unhandled cases and errors, off-by-one, broken invariants, races, resource leaks;
+- behavior it changes without meaning to, for callers, saved data, configuration or users;
+- missing or weak tests for what it adds or changes;
+- code that does not follow the conventions this repository already has.
+
+Leave out style preferences that a formatter or linter settles, and anything you are not reasonably sure of.
+
+Report the findings most serious first. For each, give the file and line, what goes wrong and in which situation, and a fix. Then say in one or two sentences whether the change is ready to merge. If you found nothing worth reporting, say so plainly.`;
+}
+
+function securityReviewPrompt(args: string): string {
+  return `${reviewScope(args)}
+
+${REVIEW_RULES}
+
+This is a security review. Find vulnerabilities that the change introduces or makes reachable, such as:
+- injection: shell commands, SQL, templates, paths, or HTML built from input that is not escaped;
+- missing or wrong authentication and authorization checks;
+- secrets in code, logs, errors or URLs;
+- path traversal, unsafe file permissions, symbolic link tricks;
+- requests to addresses an attacker chooses (SSRF), open redirects;
+- unsafe deserialization, code evaluation, or loading code and configuration from places an attacker controls;
+- weak or misused cryptography, predictable tokens.
+
+Report only findings with a concrete way to exploit them in this code, and say what an attacker needs: what they control and what access they have. Leave out theoretical issues, denial of service from heavy load, missing hardening that nothing here relies on, and problems that existed before this change unless it makes them worse.
+
+For each finding give its severity (high, medium or low), the file and line, how it is exploited, and the fix. Most serious first. If you found nothing that qualifies, say so plainly rather than listing weak candidates.`;
+}
 
 function formatTokens(count: number): string {
   return count.toLocaleString('en-US');
@@ -206,8 +264,9 @@ const BUILTINS: Record<string, BuiltinCommand> = {
   help: {
     description: 'Show this list',
     run: (_args, runtime) => {
-      const lines = Object.entries(BUILTINS).map(([name, command]) => `  /${name.padEnd(12)} ${command.description}`);
       const skills = [...skillsOf(runtime).values()].filter((skill) => skill.userInvocable);
+      const defaults = Object.entries(DEFAULTS).filter(([name]) => !skills.some((skill) => skill.name === name));
+      const lines = [...Object.entries(BUILTINS), ...defaults].map(([name, command]) => `  /${name.padEnd(12)} ${command.description}`);
       if (skills.length > 0) {
         lines.push('', 'Skills:');
         for (const skill of skills) {
@@ -336,22 +395,56 @@ const BUILTINS: Record<string, BuiltinCommand> = {
     },
   },
   rewind: {
-    description: 'Undo file changes from the last turn, or the last N turns. Shell command effects are not undone',
-    run: async (args, runtime) => {
+    description: 'Go back to before an earlier message: its file changes, the conversation, or both. /rewind N undoes the files of the last N turns',
+    run: async (args, runtime, io) => {
       const checkpoints = runtime.context.checkpoints;
-      if (!checkpoints) return { output: 'File history is off in this session.' };
-      const count = args ? Number.parseInt(args, 10) : 1;
-      if (!Number.isInteger(count) || count < 1) return { output: 'Usage: /rewind [number of turns]' };
-      const result = await checkpoints.rewind(count);
-      const lines = [
+      const describe = (result: RewindResult): string[] => [
         ...result.restored.map((path) => `restored  ${path}`),
         ...result.removed.map((path) => `removed   ${path}`),
         ...result.skipped.map((path) => `skipped   ${path} (symlink)`),
       ];
-      if (lines.length === 0) return { output: 'No file changes to undo.' };
-      return {
-        output: `${lines.join('\n')}\nThe conversation is unchanged, so tell the model if it should know about this.`,
+      if (args) {
+        if (!checkpoints) return { output: 'File history is off in this session.' };
+        const count = Number.parseInt(args, 10);
+        if (!Number.isInteger(count) || count < 1 || String(count) !== args.trim()) return { output: 'Usage: /rewind, or /rewind <number of turns> to undo only their file changes' };
+        const lines = describe(await checkpoints.rewind(count));
+        if (lines.length === 0) return { output: 'No file changes to undo.' };
+        return { output: `${lines.join('\n')}\nThe conversation is unchanged, so tell the model if it should know about this.` };
+      }
+      const points = promptPoints(runtime.agent.messages).reverse().slice(0, 20);
+      if (points.length === 0) return { output: 'Nothing to go back to yet.' };
+      const label = (text: string): string => {
+        const line = text.trim().split('\n')[0] ?? '';
+        return line.length > 70 ? `${line.slice(0, 69)}…` : line || '(empty)';
       };
+      const picked = await io.choose('Go back to before which message?', points.map((point) => label(point.text)));
+      if (picked === null) return {};
+      const point = points[picked]!;
+      const firstTurn = checkpoints ? checkpoints.currentTurn - point.turnsSince + 1 : 0;
+      const changedFiles = checkpoints ? checkpoints.turnsWithChanges().some((turn) => turn >= firstTurn) : false;
+      const actions: { label: string; files: boolean; conversation: boolean }[] = [
+        ...(changedFiles ? [{ label: 'Files and conversation', files: true, conversation: true }] : []),
+        { label: 'Conversation only', files: false, conversation: true },
+        ...(changedFiles ? [{ label: 'Files only', files: true, conversation: false }] : []),
+      ];
+      const chosen = await io.choose(
+        changedFiles ? 'What to go back?' : 'No file was changed through Edit or Write since then. Go back in the conversation?',
+        [...actions.map((action) => action.label), 'Cancel'],
+      );
+      if (chosen === null || chosen >= actions.length) return {};
+      const action = actions[chosen]!;
+      const lines: string[] = [];
+      // Files first: the conversation goes on in a new session, which has a file history of its own.
+      if (action.files && checkpoints) lines.push(...describe(await checkpoints.rewindFrom(firstTurn)));
+      if (!action.conversation) {
+        lines.push(lines.length > 0 ? 'The conversation is unchanged, so tell the model if it should know about this.' : 'No file changes to undo.');
+        return { output: lines.join('\n') };
+      }
+      const previous = runtime.rewindConversation(point.index);
+      lines.push(`The conversation is back to before that message. The full one is kept as session ${previous}.`);
+      if (!action.files && changedFiles) lines.push('Files are as they are now.');
+      lines.push('Shell command effects are never undone.');
+      return { output: lines.join('\n'), input: point.text };
     },
   },
   resume: {
@@ -413,9 +506,9 @@ const BUILTINS: Record<string, BuiltinCommand> = {
     },
   },
   mcp: {
-    description: 'Show MCP servers. Also: /mcp reconnect <name|all>, /mcp login <name>, /mcp logout <name>',
-    run: (args, runtime) => {
-      const [action, target] = args.split(/\s+/);
+    description: 'Show MCP servers. Also: /mcp reconnect <name|all>, /mcp login <name> [--paste], /mcp logout <name>',
+    run: (args, runtime, io) => {
+      const [action, target, ...flags] = args.split(/\s+/);
       if (!action) {
         const states = runtime.mcp.states();
         if (states.length === 0) return { output: 'No MCP servers. Add one with `karst mcp add`.' };
@@ -434,8 +527,10 @@ const BUILTINS: Record<string, BuiltinCommand> = {
         };
       }
       if (action === 'login') {
-        if (!target) return { output: 'Usage: /mcp login <name>' };
-        return { run: async (signal) => ({ output: describeServer(await runtime.mcp.login(target, signal)) }) };
+        if (!target) return { output: 'Usage: /mcp login <name> [--paste]' };
+        // Over SSH the browser is on another machine, and cannot reach the address it is sent back to.
+        const paste = (flags.includes('--paste') || isRemoteSession()) && io.ask ? (question: string) => io.ask!(question) : undefined;
+        return { run: async (signal) => ({ output: describeServer(await runtime.mcp.login(target, signal, paste)) }) };
       }
       if (action === 'logout') {
         if (!target) return { output: 'Usage: /mcp logout <name>' };
@@ -507,6 +602,35 @@ const BUILTINS: Record<string, BuiltinCommand> = {
       }
       runtime.context.setCwd(dir);
       return { output: `Now in ${dir}` };
+    },
+  },
+  keybindings: {
+    description: 'Make your keyboard shortcuts file, or show where it is',
+    run: () => {
+      const path = keybindingsPath();
+      if (existsSync(path)) return { output: `Your keyboard shortcuts are in ${path}. Changes apply within a second.` };
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, KEYBINDINGS_TEMPLATE, { mode: 0o600 });
+      return { output: `Wrote ${path}, binding Ctrl+J to a new line. Edit it to add your own; changes apply within a second.` };
+    },
+  },
+  theme: {
+    description: 'Show or change the colors: default, dark, light, colorblind or ansi',
+    run: (args) => {
+      const name = args.trim();
+      const names = Object.keys(THEMES).join(', ');
+      if (!name) return { output: `Theme: ${currentTheme()}. Themes: ${names}. /theme <name> changes it and saves it in your user settings.` };
+      if (!isThemeName(name)) return { output: `Unknown theme "${name}". Themes: ${names}.` };
+      setTheme(name);
+      const path = settingsPathFor('user', '');
+      try {
+        updateSettingsFile(path, (settings) => {
+          settings.theme = name;
+        });
+      } catch (error) {
+        return { output: `Theme: ${name}, for this session. ${(error as Error).message}` };
+      }
+      return { output: `Theme: ${name}, saved in ${path}.` };
     },
   },
   config: {
@@ -699,6 +823,23 @@ const BUILTINS: Record<string, BuiltinCommand> = {
   exit: { description: 'Quit', run: () => ({ exit: true }) },
 };
 
+/**
+ * Commands that come with Karst but give way to a skill or custom command of the same name, so
+ * that a project's own /review keeps working.
+ */
+const DEFAULTS: Record<string, BuiltinCommand & { hint?: string }> = {
+  review: {
+    description: 'Review uncommitted changes, a branch (/review main) or a pull request (/review 42)',
+    hint: '[branch | PR]',
+    run: (args) => ({ prompt: reviewPrompt(args) }),
+  },
+  'security-review': {
+    description: 'Look for security vulnerabilities in uncommitted changes, a branch or a pull request',
+    hint: '[branch | PR]',
+    run: (args) => ({ prompt: securityReviewPrompt(args) }),
+  },
+};
+
 /** A command the user can type, for completion and the command menu. */
 export interface CommandEntry {
   /** Without the slash. */
@@ -708,7 +849,10 @@ export interface CommandEntry {
   hint?: string;
 }
 
-/** Built-in commands, then skills, then MCP prompts. A built-in hides a skill of the same name, as when running one. */
+/**
+ * Built-in commands, then skills, then MCP prompts, then the defaults. A built-in hides a skill of
+ * the same name, and a skill hides a default, as when running one.
+ */
 export function commandEntries(runtime: Runtime): CommandEntry[] {
   const entries: CommandEntry[] = Object.entries(BUILTINS).map(([name, command]) => ({ name, description: command.description }));
   for (const skill of skillsOf(runtime).values()) {
@@ -717,6 +861,7 @@ export function commandEntries(runtime: Runtime): CommandEntry[] {
   for (const { command, server, prompt } of runtime.mcp.prompts()) {
     entries.push({ name: command, description: prompt.description ?? `Prompt from the ${server} MCP server` });
   }
+  for (const [name, command] of Object.entries(DEFAULTS)) entries.push({ name, description: command.description, ...(command.hint ? { hint: command.hint } : {}) });
   const seen = new Set<string>();
   return entries.filter((entry) => !seen.has(entry.name) && seen.add(entry.name));
 }
@@ -795,7 +940,11 @@ export async function runSlashCommand(line: string, runtime: Runtime, io: Comman
   if (name === 'quit') return { exit: true };
   const builtin = BUILTINS[name];
   if (builtin) return builtin.run(args, runtime, io);
-  return resolveExtensionCommand(name, args, runtime) ?? { output: `Unknown command: /${name}. Type /help to list commands.` };
+  const extension = resolveExtensionCommand(name, args, runtime);
+  if (extension) return extension;
+  const fallback = DEFAULTS[name];
+  if (fallback) return fallback.run(args, runtime, io);
+  return { output: `Unknown command: /${name}. Type /help to list commands.` };
 }
 
 /** Runs any deferred work, leaving a result with nothing further to do. */

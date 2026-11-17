@@ -25,6 +25,10 @@ export interface HookHandler {
   command?: string;
   /** Run without a shell, so each value stays one argument. */
   args?: string[];
+  /** For `prompt`: what the model checks. `$ARGUMENTS` is replaced with the hook's input JSON. */
+  prompt?: string;
+  /** For `prompt`: the model, or `opus`, `sonnet` or `haiku`. Defaults to the provider's small model. */
+  model?: string;
   /** For `http`. */
   url?: string;
   headers?: Record<string, string>;
@@ -81,6 +85,21 @@ export interface Settings {
   updateCheck?: boolean;
   /** Install a newer version in the background as a session starts, rather than only saying there is one. Off by default. Read from user settings only. */
   autoUpdates?: boolean;
+  /** A command whose output is shown under the status line. It runs code, so a project's needs trust. */
+  statusLine?: StatusLineSettings;
+  /** The colors of the interactive screen: `default`, `dark`, `light`, `colorblind` or `ansi`. */
+  theme?: string;
+  /** `vim` edits the prompt with vim keys. */
+  editorMode?: string;
+}
+
+export interface StatusLineSettings {
+  type: 'command';
+  command: string;
+  /** Spaces before each line. */
+  padding?: number;
+  /** Also run it every this many seconds, for a clock or anything else that changes on its own. */
+  refreshInterval?: number;
 }
 
 export interface LoadOptions {
@@ -120,6 +139,9 @@ export interface LoadedSettings {
   worktreeBaseRef?: 'fresh' | 'head';
   updateCheck: boolean;
   autoUpdates: boolean;
+  statusLine?: StatusLineSettings;
+  theme?: string;
+  editorMode?: string;
 }
 
 function readJson(path: string, warnings: string[]): Settings | null {
@@ -141,6 +163,7 @@ function hasPrivilegedParts(settings: Settings): boolean {
   return (
     (settings.permissions?.allow?.length ?? 0) > 0 ||
     Object.keys(settings.hooks ?? {}).length > 0 ||
+    settings.statusLine !== undefined ||
     settings.provider !== undefined ||
     settings.sandbox !== undefined ||
     Object.keys(settings.env ?? {}).length > 0 ||
@@ -196,6 +219,13 @@ export function loadSettings(options: LoadOptions): LoadedSettings {
     if (typeof settings.includeCoAuthoredBy === 'boolean') result.includeCoAuthoredBy = settings.includeCoAuthoredBy;
     if (typeof settings.autoMemoryEnabled === 'boolean') result.autoMemoryEnabled = settings.autoMemoryEnabled;
     if (settings.worktree?.baseRef === 'fresh' || settings.worktree?.baseRef === 'head') result.worktreeBaseRef = settings.worktree.baseRef;
+    if (settings.statusLine !== undefined) {
+      const line = settings.statusLine as Partial<StatusLineSettings> | null;
+      if (line && line.type === 'command' && typeof line.command === 'string' && line.command.trim()) result.statusLine = line as StatusLineSettings;
+      else warnings.push('statusLine needs {"type": "command", "command": "..."}; ignoring it.');
+    }
+    if (typeof settings.theme === 'string') result.theme = settings.theme;
+    if (typeof settings.editorMode === 'string') result.editorMode = settings.editorMode;
     Object.assign(result.env, settings.env);
     if (settings.sandbox) result.sandbox = mergeSandboxSettings(result.sandbox, settings.sandbox);
     for (const [name, config] of Object.entries(settings.providers ?? {})) {

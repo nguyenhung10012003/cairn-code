@@ -34,7 +34,11 @@ export class CheckpointStore {
       for (const line of readFileSync(this.manifest, 'utf8').split('\n')) {
         if (!line.trim()) continue;
         try {
-          const entry = JSON.parse(line) as SnapshotEntry;
+          const entry = JSON.parse(line) as SnapshotEntry | { start: number };
+          if ('start' in entry) {
+            this.turn = Math.max(this.turn, entry.start);
+            continue;
+          }
           this.entries.push(entry);
           this.turn = Math.max(this.turn, entry.turn);
         } catch {
@@ -44,9 +48,23 @@ export class CheckpointStore {
     }
   }
 
-  /** Called for each user prompt. Snapshots are grouped by the turn that made them. */
+  /**
+   * Called for each user prompt. Snapshots are grouped by the turn that made them. Each start is
+   * written down, so a resumed session still counts its turns from the end, as /rewind does.
+   */
   beginTurn(): number {
     this.turn += 1;
+    try {
+      mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+      appendFileSync(this.manifest, `${JSON.stringify({ start: this.turn })}\n`, { mode: 0o600 });
+    } catch {
+      // Without the line, a resumed session counts fewer turns; the snapshots are still right.
+    }
+    return this.turn;
+  }
+
+  /** The number of the turn running now, or the last one. */
+  get currentTurn(): number {
     return this.turn;
   }
 
@@ -77,9 +95,17 @@ export class CheckpointStore {
   }
 
   /** Undoes the last `count` turns that changed files. */
-  async rewind(count = 1): Promise<RewindResult> {
+  rewind(count = 1): Promise<RewindResult> {
+    return this.undo(new Set(this.turnsWithChanges().slice(0, count)));
+  }
+
+  /** Undoes turn `first` and every turn after it, putting files back as they were before it began. */
+  rewindFrom(first: number): Promise<RewindResult> {
+    return this.undo(new Set(this.turnsWithChanges().filter((turn) => turn >= first)));
+  }
+
+  private async undo(targets: Set<number>): Promise<RewindResult> {
     const result: RewindResult = { restored: [], removed: [], skipped: [] };
-    const targets = new Set(this.turnsWithChanges().slice(0, count));
     if (targets.size === 0) return result;
 
     // The earliest snapshot of a path is its state before all the turns being undone.

@@ -42,8 +42,9 @@ import { appendLocalAllowRule, loadSettings } from '../config/settings.ts';
 import { ensureWorkspaceDir } from '../config/workspace.ts';
 import type { HooksConfig, LoadedSettings, SettingSource } from '../config/settings.ts';
 import { isTrusted } from '../config/trust.ts';
+import { FileWatcher } from '../hooks/file-watch.ts';
 import { HookRunner } from '../hooks/runner.ts';
-import type { HookCommonInput } from '../hooks/runner.ts';
+import type { HookCommonInput, HookResult } from '../hooks/runner.ts';
 import { loadMcpConfig } from '../mcp/config.ts';
 import { McpManager } from '../mcp/manager.ts';
 import { PermissionEngine } from '../permissions/engine.ts';
@@ -51,6 +52,7 @@ import type { PermissionMode } from '../permissions/engine.ts';
 import { canonicalize } from '../permissions/rules.ts';
 import { loadPlugins, pluginHooks, pluginMcpServers } from '../plugins/plugins.ts';
 import type { Plugin } from '../plugins/plugins.ts';
+import { networkQuestion } from '../sandbox/ask.ts';
 import { createSandbox } from '../sandbox/sandbox.ts';
 import type { Sandbox } from '../sandbox/sandbox.ts';
 import { loadSkills, renderSkillListing, skillMatchesPath } from '../skills/skills.ts';
@@ -231,6 +233,11 @@ export interface Runtime {
   resumeSession(id: string): { stopped?: string; restored?: string } | null;
   /** Copies this conversation into a new session and continues there. */
   forkSession(name?: string): void;
+  /**
+   * Goes on in a new session with the conversation as it was before message `index`. The old
+   * session keeps everything, as a transcript is never changed. Returns the old session's id.
+   */
+  rewindConversation(index: number): string;
   renameSession(name: string): void;
   /** Grants access to a directory, and loads its skills, commands and agents. */
   addDirectory(dir: string): void;
@@ -466,6 +473,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   });
   const hookConfig = safe ? {} : mergeHookConfigs(bare ? {} : settings.hooks, ...plugins.map((plugin) => pluginHooks(plugin, projectDir, warnings)));
   for (const type of new Set(HookRunner.unsupported(hookConfig))) warnings.push(`Hooks of type "${type}" are not supported yet, and are skipped.`);
+  for (const event of HookRunner.misplacedPrompts(hookConfig)) warnings.push(`Hooks of type "prompt" do not run on ${event}, and are skipped. They run on PreToolUse, PostToolUse, PostToolUseFailure, PostToolBatch, UserPromptSubmit, Stop and SubagentStop.`);
   const hooks = new HookRunner(hookConfig, projectDir);
   const noInstructions: LoadedInstructions = { files: [], conditional: [], warnings: [] };
   const loaded = safe || bare ? noInstructions : loadInstructions(projectDir, trusted);
@@ -555,11 +563,31 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   let planReminded = false;
   const credentialVars = allCredentialVars(settings.providers, provider);
 
+  // FileChanged watches the files its matchers name in the working directory, and those a
+  // SessionStart, CwdChanged or FileChanged hook asks for. Nothing is watched without such a hook.
+  let hookWatchPaths: string[] = [];
+  const takeWatchPaths = (result: HookResult): void => {
+    if (!result.watchPaths) return;
+    hookWatchPaths = result.watchPaths;
+    rewatch();
+  };
+  const fileWatcher = hooks.has('FileChanged')
+    ? new FileWatcher((path, event) => {
+        void hooks.run('FileChanged', common(), { file_path: path, event }).then((result) => {
+          for (const notice of result.notices) options.onNotice?.(notice);
+          takeWatchPaths(result);
+        });
+      })
+    : undefined;
+  const rewatch = (): void => fileWatcher?.setPaths([...hooks.watchedNames().map((name) => resolve(cwd, name)), ...hookWatchPaths]);
   const context: Omit<ToolContext, 'signal'> = {
     cwd: () => cwd,
     setCwd: (dir) => {
-      if (dir !== cwd) void hooks.run('CwdChanged', { ...common(), cwd: dir }, { old_cwd: cwd, new_cwd: dir });
-      cwd = dir;
+      if (dir !== cwd) {
+        void hooks.run('CwdChanged', { ...common(), cwd: dir }, { old_cwd: cwd, new_cwd: dir }).then(takeWatchPaths);
+        cwd = dir;
+        rewatch();
+      }
     },
     workingDirs: () => engine.workingDirs(),
     files: new FileTracker(),
@@ -591,9 +619,14 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
 
   const startHook = await hooks.run('SessionStart', common(), { source: resumeId === undefined ? 'startup' : 'resume' });
   warnings.push(...startHook.notices);
+  if (startHook.watchPaths) hookWatchPaths = startHook.watchPaths;
+  rewatch();
   for (const file of loaded.files) void hooks.run('InstructionsLoaded', common(), { file_path: file.path, load_reason: 'session_start' });
 
-  const created = await createSandbox(settings.sandbox, { cwd: projectDir, workingDirs: () => engine.workingDirs() });
+  // A sandboxed command reaching a domain the settings do not name asks the person at the
+  // terminal. Nobody is there to ask in an unattended session, so it is refused.
+  const askNetwork = options.unattended ? undefined : networkQuestion(options.prompter, projectDir, options.onNotice);
+  const created = await createSandbox(settings.sandbox, { cwd: projectDir, workingDirs: () => engine.workingDirs(), ...(askNetwork ? { askNetwork } : {}) });
   warnings.push(...created.warnings);
   engine.sandbox = created.sandbox;
   if (created.sandbox) context.wrapCommand = created.sandbox.wrap;
@@ -991,6 +1024,20 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }
   };
 
+  // Prompt hooks ask the provider's small model unless they name one.
+  hooks.evaluator = async ({ system, prompt, model: requested, signal }) => {
+    const model = requested ? resolveName(requested) : (aliasFor('haiku') ?? agent.model);
+    let reply = '';
+    const stream = provider.stream({ model, system: [{ text: system }], messages: [userText(prompt)], tools: [], maxTokens: 2_000, disableCache: true, signal });
+    for await (const event of stream) {
+      if (event.type === 'message_end') {
+        reply = textOf(event.content);
+        agent.addUsage(event.usage, event.costUsd, model);
+      }
+    }
+    return reply;
+  };
+
   const generateTitle = async (): Promise<void> => {
     const first = agent.messages.find((message) => message.role === 'user');
     const text = first ? textOf(first.content).slice(0, 4_000) : '';
@@ -1282,6 +1329,17 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       // The conversation goes on here, so its scheduled jobs come back when this copy is resumed.
       cron?.adopt(next.id);
     },
+    rewindConversation: (index) => {
+      const previous = store.id;
+      const next = persist ? SessionStore.create(projectDir, agent.model, undefined, store.id) : SessionStore.ephemeral();
+      next.appendSystem(agent.systemBlocks);
+      const messages = agent.messages.slice(0, Math.max(0, index));
+      for (const message of messages) next.appendMessage(message);
+      sessionName = undefined;
+      switchTo(next, messages);
+      cron?.adopt(next.id);
+      return previous;
+    },
     renameSession: (name) => {
       store.appendName(name);
       sessionName = name;
@@ -1331,6 +1389,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       tasks.stopAll();
       // What has not exited yet gets KILL from it after a grace period, which Karst, exiting, cannot send.
       reaper.close();
+      fileWatcher?.close();
       await created.sandbox?.close();
       await mcp.close();
       await hooks.run('SessionEnd', common());

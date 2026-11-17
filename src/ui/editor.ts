@@ -30,6 +30,12 @@ export class LineEditor {
     this.browsing = undefined;
   }
 
+  /** Replaces the text and puts the cursor at `cursor`, a character index. */
+  set(text: string, cursor: number): void {
+    this.setText(text);
+    this.cursor = Math.max(0, Math.min(this.buffer.length, cursor));
+  }
+
   /** Returns the text, remembers it for Up, and clears the line. */
   take(): string {
     const text = this.text;

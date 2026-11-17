@@ -1,5 +1,6 @@
 /** The `karst mcp ...` subcommands. */
 import { realpathSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { APP_NAME } from '../config/paths.ts';
 import { isTrusted } from '../config/trust.ts';
@@ -7,7 +8,20 @@ import { ensureWorkspaceDir } from '../config/workspace.ts';
 import { sanitize } from '../ui/render.ts';
 import { configPathFor, loadMcpConfig, normalizeServerName, writeServer } from './config.ts';
 import { McpManager } from './manager.ts';
+import { isRemoteSession } from './oauth.ts';
 import type { McpServerState } from './manager.ts';
+
+/** One line from the terminal, for the address a remote browser was sent back to. */
+async function pasteFromStdin(question: string): Promise<string | null> {
+  const lines = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await lines.question(`${question}\n> `);
+  } catch {
+    return null;
+  } finally {
+    lines.close();
+  }
+}
 
 const USAGE = `Usage: ${APP_NAME} mcp <command>
 
@@ -20,7 +34,8 @@ const USAGE = `Usage: ${APP_NAME} mcp <command>
   remove [-s scope] <name>               Remove a server
   list                                   List servers and check their connections
   get <name>                             Show one server
-  login <name>                           Sign in to a remote server in the browser
+  login <name> [--paste]                 Sign in to a remote server in the browser. With --paste, or over SSH,
+                                         paste the address the browser ends on instead
   logout <name>                          Delete stored sign-in details
 `;
 
@@ -185,8 +200,9 @@ export async function runMcpCommand(argv: string[]): Promise<number> {
       case 'login': {
         const name = requireArg(rest[0], 'a server name');
         const { manager } = openManager(projectDir, name);
+        const paste = rest.includes('--paste') || isRemoteSession() ? pasteFromStdin : undefined;
         try {
-          const state = await manager.login(normalizeServerName(name));
+          const state = await manager.login(normalizeServerName(name), undefined, paste);
           process.stdout.write(`${statusLine(state)}\n`);
           return state.status === 'connected' ? 0 : 1;
         } finally {

@@ -11,6 +11,28 @@ const MAX_HEADER_BYTES = 64 * 1024;
 export interface ProxyPolicy {
   allowedDomains: string[];
   deniedDomains: string[];
+  /**
+   * Asked about a host that neither list names, when someone is there to answer. Without it, such
+   * a host is refused. A denied domain is refused without asking.
+   */
+  ask?: (host: string, port: number) => Promise<boolean>;
+}
+
+/**
+ * The answers given this session, by `host:port`, so a command that retries is not asked about
+ * again, and calls that arrive together share one question.
+ */
+function rememberingAsk(ask: (host: string, port: number) => Promise<boolean>): (host: string, port: number) => Promise<boolean> {
+  const answers = new Map<string, Promise<boolean>>();
+  return (host, port) => {
+    const key = `${host.toLowerCase()}:${port}`;
+    let answer = answers.get(key);
+    if (!answer) {
+      answer = ask(host, port).catch(() => false);
+      answers.set(key, answer);
+    }
+    return answer;
+  };
 }
 
 export interface RunningProxy {
@@ -30,9 +52,14 @@ function entryMatches(entry: string, host: string, port: number): boolean {
 }
 
 export function hostDecision(policy: ProxyPolicy, host: string, port: number): boolean {
+  return hostVerdict(policy, host, port) === 'allow';
+}
+
+/** `unlisted` when neither list names the host, which is when the user may be asked. */
+export function hostVerdict(policy: ProxyPolicy, host: string, port: number): 'allow' | 'deny' | 'unlisted' {
   const lowered = host.toLowerCase();
-  if (policy.deniedDomains.some((entry) => entryMatches(entry, lowered, port))) return false;
-  return policy.allowedDomains.some((entry) => entryMatches(entry, lowered, port));
+  if (policy.deniedDomains.some((entry) => entryMatches(entry, lowered, port))) return 'deny';
+  return policy.allowedDomains.some((entry) => entryMatches(entry, lowered, port)) ? 'allow' : 'unlisted';
 }
 
 export function isLocalAddress(address: string): boolean {
@@ -68,10 +95,17 @@ function splitTarget(authority: string, defaultPort: number): { host: string; po
 }
 
 async function open(client: Socket, policy: ProxyPolicy, host: string, port: number, onConnected: (upstream: Socket) => void): Promise<void> {
-  if (!hostDecision(policy, host, port)) {
-    refuse(client, '403 Forbidden', `The sandbox does not allow connections to ${host}. Add it to sandbox.network.allowedDomains to allow it.`);
+  const verdict = hostVerdict(policy, host, port);
+  if (verdict === 'deny') {
+    refuse(client, '403 Forbidden', `The sandbox does not allow connections to ${host}: sandbox.network.deniedDomains names it.`);
     return;
   }
+  if (verdict === 'unlisted' && !(policy.ask && (await policy.ask(host, port)))) {
+    const why = policy.ask ? 'The user declined it.' : 'Add it to sandbox.network.allowedDomains to allow it.';
+    refuse(client, '403 Forbidden', `The sandbox does not allow connections to ${host}. ${why}`);
+    return;
+  }
+  if (client.destroyed) return;
   // An address written out in allowedDomains is a deliberate choice, as with a local service.
   const namedExactly = isIP(host) !== 0;
   if (!namedExactly && (await reachesOnlyLocal(host))) {
@@ -136,7 +170,8 @@ function handle(client: Socket, policy: ProxyPolicy): void {
   client.on('data', onData);
 }
 
-export function startProxy(policy: ProxyPolicy): Promise<RunningProxy> {
+export function startProxy(given: ProxyPolicy): Promise<RunningProxy> {
+  const policy: ProxyPolicy = given.ask ? { ...given, ask: rememberingAsk(given.ask) } : given;
   return new Promise((resolve, reject) => {
     const clients = new Set<Socket>();
     const server: Server = createServer((client) => {

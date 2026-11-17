@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeAll, describe, it } from 'bun:test';
@@ -398,6 +398,59 @@ describe('hooks in the loop', () => {
     await collect(h.runtime, 'go');
     assert.equal(existsSync(target), false);
     assert.match(toolResults(h, 1)[0]!.content, /nope/);
+  });
+
+  it('a PreToolUse prompt hook asks the model, and its no blocks the call', async () => {
+    const dir = project();
+    const target = join(dir, 'marker');
+    const settings = JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'prompt', prompt: 'Block any command that creates files: $ARGUMENTS' }] }] } });
+    const h = await harness(
+      [{ toolCalls: [{ name: 'Bash', input: { command: `touch ${target}` } }] }, { text: '{"ok": false, "reason": "It creates a file"}' }, { text: 'ok' }],
+      { dir, mode: 'bypassPermissions', settingsArg: settings },
+    );
+    await collect(h.runtime, 'go');
+    assert.equal(existsSync(target), false);
+    assert.match(toolResults(h, 2)[0]!.content, /It creates a file/);
+  });
+
+  it('FileChanged runs when a file its matcher names is created, changed or deleted, by anything', async () => {
+    const dir = project();
+    const log = join(dir, 'events.log');
+    const extra = join(dir, 'extra.txt');
+    const settings = JSON.stringify({
+      hooks: {
+        FileChanged: [
+          { matcher: '.envrc|.env', hooks: [{ type: 'command', command: `cat >> ${log}; echo >> ${log}` }] },
+          // No matcher: it runs for every watched file, including those a hook adds.
+          { hooks: [{ type: 'command', command: `echo any >> ${log}` }] },
+        ],
+        SessionStart: [{ hooks: [{ type: 'command', command: `echo '${JSON.stringify({ hookSpecificOutput: { watchPaths: [extra] } })}'` }] }],
+      },
+    });
+    const notices: string[] = [];
+    const h = await harness([], { dir, settingsArg: settings, onNotice: (text) => notices.push(text) });
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 600));
+    const lines = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []);
+    writeFileSync(join(dir, '.envrc'), 'export A=1\n');
+    await settle();
+    writeFileSync(join(dir, '.envrc'), 'export A=2\n');
+    await settle();
+    rmSync(join(dir, '.envrc'));
+    await settle();
+    writeFileSync(join(dir, 'unwatched.txt'), 'x');
+    writeFileSync(extra, 'x');
+    await settle();
+    await h.runtime.shutdown();
+    const envrc = join(dir, '.envrc');
+    const seen = lines()
+      .filter((line) => line !== 'any')
+      .map((line) => JSON.parse(line) as { hook_event_name: string; event: string; file_path: string });
+    assert.deepEqual(seen.map((payload) => `${payload.hook_event_name} ${payload.event} ${payload.file_path}`), [
+      `FileChanged add ${envrc}`,
+      `FileChanged change ${envrc}`,
+      `FileChanged unlink ${envrc}`,
+    ]);
+    assert.equal(lines().filter((line) => line === 'any').length, 4, 'the group with no matcher ran for .envrc three times and for extra.txt once');
   });
 
   it('PreToolUse receives the call on stdin and can rewrite its input', async () => {

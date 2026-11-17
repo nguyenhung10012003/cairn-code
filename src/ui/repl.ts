@@ -7,11 +7,12 @@
 import { basename } from 'node:path';
 import { emitKeypressEvents } from 'node:readline';
 import { createInterface } from 'node:readline';
-import { APP_DISPLAY_NAME } from '../config/paths.ts';
+import { APP_DISPLAY_NAME, VERSION } from '../config/paths.ts';
 import { commandEntries, isCommandLine, parseSlash, runSlashCommand, settleCommand } from '../commands/slash.ts';
 import type { CommandIO, CommandResult, TabPage } from '../commands/slash.ts';
 import type { Agent, AgentEvent } from '../core/agent.ts';
 import { contextTokens } from '../core/messages.ts';
+import { modelFacts } from '../core/prompts.ts';
 import type { ImageBlock } from '../core/messages.ts';
 import type { Runtime } from '../core/runtime.ts';
 import type { PermissionMode } from '../permissions/engine.ts';
@@ -19,12 +20,16 @@ import type { SkillActivation } from '../skills/skills.ts';
 import type { PermissionAnswer, PermissionPrompt, Prompter, UserQuestion } from '../tools/types.ts';
 import { AttachedImages, droppedImagePaths, loadImage, markPlaceholders, PastedTexts, PLACEHOLDER_AT_END } from './attachments.ts';
 import { readClipboardImage } from './clipboard.ts';
+import { editDiffPreview } from './diff.ts';
 import { Footer } from './footer.ts';
 import { chooseWithNote, pickFromList, readSecret } from './picker.ts';
 import type { ChoiceOption } from './picker.ts';
 import { clipToWidth, displayWidth, MarkdownStream, permissionPreview, sanitize, style, toolResultSummary, toolSummary, wrapToWidth } from './render.ts';
+import { Keybindings } from './keybindings.ts';
+import { StatusCommand } from './status-command.ts';
 import { showTabs } from './tabs.ts';
-import { modeStyle } from './theme.ts';
+import { modeStyle, setTheme, THEMES } from './theme.ts';
+import { VimMode } from './vim.ts';
 import { renderWelcome, welcomeRows } from './welcome.ts';
 
 const stdin = process.stdin;
@@ -36,7 +41,7 @@ export const SEND_DELAY_MS = 3_000;
 /** Commands that leave the running work alone, so they may run alongside it. */
 const WHILE_BUSY = new Set([
   'help', 'status', 'cost', 'usage', 'context', 'todos', 'tasks', 'queue', 'copy', 'diff', 'mode', 'effort',
-  'permissions', 'agents', 'skills', 'memory', 'hooks', 'btw', 'loop', 'exit', 'quit',
+  'permissions', 'agents', 'skills', 'memory', 'hooks', 'btw', 'loop', 'theme', 'keybindings', 'exit', 'quit',
 ]);
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -110,7 +115,8 @@ class TerminalPrompter implements Prompter {
       const block = new ScreenBlock();
       block.write('');
       block.write(style.warning(style.bold(`◆ ${prompt.toolName} needs your approval`)));
-      for (const line of permissionPreview(prompt.toolName, prompt.input)) block.write(line);
+      const diff = await editDiffPreview(prompt.toolName, prompt.input, prompt.paths?.[0]);
+      for (const line of diff ?? permissionPreview(prompt.toolName, prompt.input)) block.write(line);
       block.write(style.dim(sanitize(prompt.reason)));
       const canAlways = !prompt.forced && prompt.suggestions.length > 0;
       const rules = prompt.suggestions.map((suggestion) => suggestion.rule).join(', ');
@@ -390,6 +396,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     return `${mode === 'default' ? '' : `${modeStyle(mode)(`[${mode}]`)} `}${style.accent('❯')} `;
   };
 
+  const themeWarning = runtime.settings.theme && !setTheme(runtime.settings.theme) ? `Unknown theme "${runtime.settings.theme}". Themes: ${Object.keys(THEMES).join(', ')}.` : undefined;
   if (stdout.isTTY) {
     // The shell's title goes on the terminal's title stack, where it has one, and comes back on exit.
     stdout.write(`\x1b[22;0t\x1b]0;${sanitize(windowTitle(runtime.projectDir))}\x07`);
@@ -398,7 +405,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
   /** The opening panel, worked out again each time it is drawn, since /clear changes the session. */
   const welcome = (): string => `${renderWelcome(welcomeRows(runtime), stdout.columns || 80).join('\n')}\n`;
   stdout.write(welcome());
-  for (const warning of runtime.warnings) stdout.write(`${style.warning(style.bold('! '))}${sanitize(warning)}\n`);
+  for (const warning of [...runtime.warnings, ...(themeWarning ? [themeWarning] : []), ...new Keybindings().warnings]) stdout.write(`${style.warning(style.bold('! '))}${sanitize(warning)}\n`);
   if (runtime.engine.mode === 'bypassPermissions') {
     stdout.write(`${style.error(style.bold('! bypassPermissions: tools run without asking. Use this only in an isolated environment.'))}\n`);
   }
@@ -424,6 +431,7 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
 
   const statusLine = (): string => {
     const parts: string[] = [];
+    if (vim) parts.push(vim.mode === 'insert' ? '-- INSERT --' : '-- NORMAL --');
     if (pending) {
       const seconds = Math.max(1, Math.ceil((pending.deadline - Date.now()) / 1000));
       parts.push(`Sending in ${seconds}s · Enter sends now · Esc to edit`);
@@ -454,9 +462,49 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     (text) => print(text),
   );
 
+  const vim = runtime.settings.editorMode === 'vim' ? new VimMode() : undefined;
+  const keybindings = new Keybindings();
+  // The user's status line command, given what Claude Code's would get, as far as Karst has it.
+  const sessionStarted = Date.now();
+  const statusInput = (): Record<string, unknown> => {
+    const cwd = runtime.context.cwd();
+    const model = runtime.agent.model;
+    const window = runtime.provider.contextWindow(model);
+    const used = runtime.agent.lastContextTokens;
+    const percent = used === null ? null : Math.min(100, Math.round((used / window) * 100));
+    return {
+      session_id: runtime.agent.sessionId,
+      ...(runtime.sessionName ? { session_name: runtime.sessionName } : {}),
+      cwd,
+      model: { id: model, display_name: modelFacts(model)?.name ?? model },
+      provider: runtime.providerName,
+      workspace: { current_dir: cwd, project_dir: runtime.projectDir, added_dirs: runtime.engine.workingDirs().filter((dir) => dir !== runtime.projectDir) },
+      version: VERSION,
+      output_style: { name: runtime.settings.outputStyle ?? 'default' },
+      permission_mode: runtime.engine.mode,
+      cost: { total_cost_usd: runtime.agent.totalCostUsd },
+      context_window: {
+        context_window_size: window,
+        total_input_tokens: used,
+        used_percentage: percent,
+        remaining_percentage: percent === null ? null : 100 - percent,
+      },
+      ...(runtime.agent.effort ? { effort: { level: runtime.agent.effort } } : {}),
+      ...(vim ? { vim: { mode: vim.mode === 'insert' ? 'INSERT' : 'NORMAL' } } : {}),
+    };
+  };
+  const statusCommand = runtime.settings.statusLine
+    ? new StatusCommand(runtime.settings.statusLine, {
+        input: () => ({ ...statusInput(), cost: { total_cost_usd: runtime.agent.totalCostUsd, total_duration_ms: Date.now() - sessionStarted } }),
+        cwd: () => runtime.context.cwd(),
+        onUpdate: () => footer.render(),
+      })
+    : undefined;
+
   const footer = new Footer({
     prompt: promptText,
     status: statusLine,
+    below: () => statusCommand?.lines() ?? [],
     statusRight: () => `${runtime.agent.model} · effort ${runtime.agent.effort ?? 'default'}`,
     above: (width) => {
       const thought = thinking.lines(width);
@@ -493,6 +541,9 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     },
   });
   footer.editor.atomic = PLACEHOLDER_AT_END;
+  footer.vim = vim;
+  footer.keybindings = keybindings;
+  keybindings.onWarning = (warning) => print(`${style.warning(style.bold('! '))}${sanitize(warning)}\n`);
   const print = (text: string): void => footer.print(text);
   terminal.print = print;
 
@@ -743,6 +794,11 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
     if (result.clearScreen) print(`\x1b[2J\x1b[3J\x1b[H${welcome()}\n`);
     else if (result.output) print(`${sanitize(result.output)}\n`);
     if (result.notice) print(`${style.dim(sanitize(result.notice))}\n`);
+    // Only onto an empty line, so nothing typed meanwhile is lost.
+    if (result.input && !footer.editor.text) {
+      footer.editor.setText(result.input);
+      footer.render();
+    }
     if (result.exit) return exit();
     if (result.compact) {
       const focus = result.compact.focus;
@@ -812,11 +868,24 @@ export async function runRepl(runtime: Runtime, terminal: Terminal, initialPromp
   }, 200);
 
   footer.start();
+  // The command runs again when what it is given changes, apart from the time, which always does.
+  let statusKey = '';
+  const statusWatch = statusCommand
+    ? setInterval(() => {
+        const key = JSON.stringify(statusInput());
+        if (key === statusKey) return;
+        statusKey = key;
+        statusCommand.refresh();
+      }, 250)
+    : undefined;
+  statusCommand?.start();
   if (initialPrompt) send(initialPrompt);
   else setTimeout(afterIdle, 0);
 
   await exited;
   clearInterval(ticker);
+  clearInterval(statusWatch);
+  statusCommand?.stop();
   stopWaking();
   stdin.off('keypress', onActivity);
   footer.stop();

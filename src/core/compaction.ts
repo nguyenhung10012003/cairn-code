@@ -93,6 +93,9 @@ export async function summarizeConversation(options: CompactOptions): Promise<Co
   throw new Error('Summarization ended without a response.');
 }
 
+/** How the summary that replaces a compacted history begins. */
+export const COMPACTED_HISTORY_START = 'This session is being continued from a previous conversation that ran out of context.';
+
 export function compactedHistory(summary: string, keptContext: string[] = []): Message[] {
   const kept = keptContext.length > 0 ? `\n\n${keptContext.join('\n\n')}` : '';
   return [
@@ -101,7 +104,7 @@ export function compactedHistory(summary: string, keptContext: string[] = []): M
       content: [
         {
           type: 'text',
-          text: `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\n${summary}${kept}\n\nContinue the conversation from where it left off without asking the user any further questions. Continue with the last task that you were asked to work on.`,
+          text: `${COMPACTED_HISTORY_START} The summary below covers the earlier portion of the conversation.\n\n${summary}${kept}\n\nContinue the conversation from where it left off without asking the user any further questions. Continue with the last task that you were asked to work on.`,
         },
       ],
     },

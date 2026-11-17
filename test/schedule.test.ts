@@ -1,6 +1,7 @@
 /** Scheduled prompts kept in the workspace folder, /loop, ScheduleWakeup, CronList and CronDelete. */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, it } from 'bun:test';
@@ -169,6 +170,50 @@ describe('scheduled jobs saved in the workspace folder', () => {
     assert.equal(fired, 0);
   });
 
+  it('keep every job when several sessions save at the same moment', async () => {
+    const sessions = 4;
+    const perSession = 25;
+    const script = join(project, 'save-jobs.ts');
+    writeFileSync(
+      script,
+      `import { WorkspaceJobStore } from ${JSON.stringify(join(import.meta.dir, '../src/session/scheduled.ts'))};
+const [project, session, count, startAt] = process.argv.slice(2);
+const store = new WorkspaceJobStore(project);
+// All of them start together, so their reads and writes overlap.
+while (Date.now() < Number(startAt)) {}
+for (let i = 0; i < Number(count); i++) {
+  const id = Number(session).toString(16).padStart(2, '0') + i.toString(16).padStart(6, '0');
+  if (!store.save({ id, cron: '7 9 * * *', prompt: 'p', recurring: true, createdAt: Date.now(), sessionId: 's' + session, durable: true })) process.exit(2);
+}
+`,
+    );
+    const startAt = Date.now() + 1_500;
+    const exits = await Promise.all(
+      Array.from({ length: sessions }, (_, session) => {
+        const child = spawn(process.execPath, [script, project, String(session), String(perSession), String(startAt)], {
+          env: { ...process.env, KARST_HOME: home },
+          stdio: 'inherit',
+        });
+        return new Promise<number | null>((resolve) => child.on('exit', resolve));
+      }),
+    );
+    assert.deepEqual(exits, Array(sessions).fill(0));
+    assert.equal(new WorkspaceJobStore(project).load().length, sessions * perSession, 'no session lost another one\'s job');
+    assert.equal(existsSync(`${workspaceScheduledPath(project)}.lock`), false, 'the lock is released');
+  });
+  it('take over a lock left by a session that died holding it', () => {
+    const store = new WorkspaceJobStore(project);
+    const lock = `${workspaceScheduledPath(project)}.lock`;
+    mkdirSync(join(lock, '..'), { recursive: true });
+    writeFileSync(lock, '12345 left-behind');
+    const longAgo = new Date(Date.now() - 60_000);
+    utimesSync(lock, longAgo, longAgo);
+    const started = Date.now();
+    assert.equal(store.save({ id: '0000beef', cron: '7 9 * * *', prompt: 'p', recurring: true, createdAt: Date.now(), sessionId: 's', durable: false }), true);
+    assert.ok(Date.now() - started < 1_000, 'an old lock is not waited for');
+    assert.deepEqual(store.load().map((job) => job.id), ['0000beef']);
+    assert.equal(existsSync(lock), false);
+  });
   it('work out a job\'s run time once per match, however often they are listed', () => {
     const scheduler = new CronScheduler(() => {});
     // Leap days: finding the match after the next one searches years of minutes.

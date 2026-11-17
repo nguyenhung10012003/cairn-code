@@ -15,7 +15,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { APP_NAME, appHome, VERSION } from '../config/paths.ts';
 import type { Tool, ToolOutput } from '../tools/types.ts';
 import type { NamedServer, RemoteServerConfig, StdioServerConfig } from './config.ts';
-import { clearStoredAuth, hasStoredTokens, listenForCallback, openInBrowser, StoredOAuthProvider } from './oauth.ts';
+import { clearStoredAuth, codeFromCallback, hasStoredTokens, listenForCallback, openInBrowser, parsePastedCallback, StoredOAuthProvider } from './oauth.ts';
 import { buildMcpTool, DEFER_TOOLS_AT, formatToolResult, mcpToolName, renderMcpContent } from './tools.ts';
 import type { McpToolBackend, McpToolInfo } from './tools.ts';
 
@@ -472,8 +472,12 @@ export class McpManager implements McpToolBackend {
     return this.states().find((state) => state.name === name)!;
   }
 
-  /** The browser sign-in flow. Resolves once tokens are stored and the server is connected. */
-  async login(name: string, signal?: AbortSignal): Promise<McpServerState> {
+  /**
+   * The browser sign-in flow. Resolves once tokens are stored and the server is connected. With
+   * `pasteCallback`, for a browser on another machine, as over SSH: the user signs in wherever they
+   * like and pastes the address the browser was sent back to, which cannot load there.
+   */
+  async login(name: string, signal?: AbortSignal, pasteCallback?: (question: string) => Promise<string | null>): Promise<McpServerState> {
     const connection = this.get(name);
     const { config } = connection.spec;
     if (config.type === 'stdio') throw new Error(`"${name}" is a local server, which does not use sign-in.`);
@@ -483,6 +487,10 @@ export class McpManager implements McpToolBackend {
     try {
       const open = this.options.openUrl ?? openInBrowser;
       const provider = new StoredOAuthProvider(config.url, config.oauth, listener.redirectUri, async (url) => {
+        if (pasteCallback) {
+          this.options.onNotice?.(`Sign in to "${name}" by opening this address in a browser on any machine:\n${url.href}`);
+          return;
+        }
         this.options.onNotice?.(`Sign in to "${name}" in your browser. If it does not open, visit:\n${url.href}`);
         await open(url);
       });
@@ -493,7 +501,7 @@ export class McpManager implements McpToolBackend {
         // Stored tokens were still good, so there was nothing to do.
       } catch (error) {
         if (!(error instanceof UnauthorizedError)) throw error;
-        const code = await listener.code(provider.expectedState, signal);
+        const code = pasteCallback ? await this.pastedCode(pasteCallback, provider.expectedState) : await listener.code(provider.expectedState, signal);
         await transport.finishAuth(code);
       } finally {
         await client.close().catch(() => {});
@@ -502,6 +510,19 @@ export class McpManager implements McpToolBackend {
       listener.close();
     }
     return this.reconnect(name);
+  }
+
+  /** Asks for the address the browser ended on, until one has a code or the user gives up. */
+  private async pastedCode(pasteCallback: (question: string) => Promise<string | null>, expectedState: string): Promise<string> {
+    let question = 'After signing in, the browser goes to a localhost address that will not load. Paste that address here:';
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const pasted = await pasteCallback(question);
+      if (pasted === null || pasted.trim() === '') throw new Error('Sign-in was cancelled.');
+      const query = parsePastedCallback(pasted);
+      if (query) return codeFromCallback(query, expectedState);
+      question = 'That address has no code in it. Paste the whole address from the browser, starting with http://localhost:';
+    }
+    throw new Error('Sign-in was cancelled: no address with a code was pasted.');
   }
 
   logout(name: string): boolean {

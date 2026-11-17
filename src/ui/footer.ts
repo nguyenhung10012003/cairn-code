@@ -11,6 +11,9 @@ import { CommandMenu } from './command-menu.ts';
 import type { MenuHost } from './command-menu.ts';
 import { LineEditor } from './editor.ts';
 import { charWidth, clipToWidth, displayWidth, sanitize, style } from './render.ts';
+import { keystrokeOf } from './keybindings.ts';
+import type { KeyAction, Keybindings } from './keybindings.ts';
+import type { VimMode } from './vim.ts';
 
 const stdin = process.stdin;
 const stdout = process.stdout;
@@ -29,6 +32,8 @@ export interface FooterOptions {
   statusRight?: () => string;
   /** Lines shown above the prompt, such as a message waiting to be sent. */
   above: (width: number) => string[];
+  /** Lines under the status line, such as the output of the user's status line command. They may have colors. */
+  below?: (width: number) => string[];
   commands: () => CommandEntry[];
   /** A line was sent with Enter. */
   onSubmit: (text: string) => void;
@@ -69,6 +74,10 @@ function printable(text: string | undefined, key: Key | undefined): string {
 
 export class Footer {
   readonly editor = new LineEditor();
+  /** Vim keys for the line, when the user turned them on. */
+  vim: VimMode | undefined;
+  /** The user's own keyboard shortcuts, which come before the built-in ones. */
+  keybindings: Keybindings | undefined;
   private readonly menu: CommandMenu;
   private readonly options: FooterOptions;
   private active = false;
@@ -208,7 +217,8 @@ export class Footer {
     const menu = this.menu.lines(width);
     const rule = style.border('─'.repeat(usable));
     // A rule above and below the input sets it apart from the output and from the menu and status.
-    const lines = [...above, rule, ...rows, rule, ...menu, this.statusLine(usable)];
+    const below = (this.options.below?.(width) ?? []).map((line) => clipLine(line, usable));
+    const lines = [...above, rule, ...rows, rule, ...menu, this.statusLine(usable), ...below];
     const cursorRow = above.length + 1 + row;
     const up = lines.length - 1 - cursorRow;
     let out = inSync ? '' : SYNC_START;
@@ -298,9 +308,56 @@ export class Footer {
       return;
     }
     this.menu.close();
+    this.vim?.reset();
     const sent = this.editor.take();
     this.render();
     this.options.onSubmit(sent);
+  }
+
+  /** What a key the user bound does. */
+  private perform(action: KeyAction): void {
+    const editor = this.editor;
+    if (action.startsWith('command:')) {
+      // The draft stays on the line.
+      this.options.onSubmit(`/${action.slice('command:'.length)}`);
+      return;
+    }
+    switch (action) {
+      case 'chat:submit':
+        this.submit();
+        return;
+      case 'chat:newline':
+        editor.insert('\n');
+        break;
+      case 'history:previous':
+        editor.historyBack();
+        break;
+      case 'history:next':
+        editor.historyForward();
+        break;
+      case 'chat:cancel':
+        this.options.onEscape();
+        break;
+      case 'chat:cycleMode':
+        this.options.onShiftTab();
+        break;
+      case 'chat:imagePaste':
+        this.options.onPasteImage?.(false);
+        return;
+      case 'app:interrupt':
+        if (editor.text) editor.setText('');
+        else this.options.onInterrupt();
+        break;
+      case 'app:exit':
+        this.options.onEof();
+        return;
+      case 'app:redraw':
+      case 'chat:clearInput':
+        this.drawn = false;
+        stdout.write('\x1b[2J\x1b[H');
+        break;
+    }
+    this.render();
   }
 
   private readonly onKey = (text: string | undefined, key: Key | undefined): void => {
@@ -338,6 +395,25 @@ export class Footer {
     if (this.menu.handle(key, this.host)) {
       this.render();
       return;
+    }
+    const bound = this.keybindings?.lookup(keystrokeOf(text, key));
+    // Bound to null: the key does nothing, not even what it does by default.
+    if (bound === null) return;
+    if (bound !== undefined) {
+      this.perform(bound);
+      return;
+    }
+    if (this.vim) {
+      const outcome = this.vim.handle(text, key, this.editor);
+      if (outcome === 'submit') {
+        this.submit();
+        return;
+      }
+      if (outcome === 'handled') {
+        this.menu.update(key, this.host);
+        this.render();
+        return;
+      }
     }
     const editor = this.editor;
     const name = key?.name;

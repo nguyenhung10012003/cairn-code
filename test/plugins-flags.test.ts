@@ -127,7 +127,7 @@ describe('hooks', () => {
   });
 
   it('reports types it cannot run', () => {
-    assert.deepEqual(HookRunner.unsupported({ Stop: [{ hooks: [{ type: 'prompt' }, { type: 'command', command: 'x' }] }] }), ['prompt']);
+    assert.deepEqual(HookRunner.unsupported({ Stop: [{ hooks: [{ type: 'agent' }, { type: 'prompt', prompt: 'x' }, { type: 'command', command: 'x' }] }] }), ['agent']);
   });
 
   it('removes a once hook after it succeeds', async () => {
@@ -220,8 +220,8 @@ describe('hooks', () => {
     });
 
     it('warns about hook types it cannot run', async () => {
-      const { runtime } = await start(dir, [], { settingsArg: JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'prompt', prompt: 'x' }] }] } }) });
-      assert.ok(runtime.warnings.some((warning) => warning.includes('"prompt"')));
+      const { runtime } = await start(dir, [], { settingsArg: JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'agent', prompt: 'x' }] }] } }) });
+      assert.ok(runtime.warnings.some((warning) => warning.includes('"agent"')));
       await runtime.shutdown();
     });
   });

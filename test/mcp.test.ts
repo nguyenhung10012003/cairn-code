@@ -22,7 +22,7 @@ import { loadMcpConfig, localConfigPath, normalizeServerName, projectConfigPath,
 import type { McpServerConfig, NamedServer } from '../src/mcp/config.ts';
 import { McpManager } from '../src/mcp/manager.ts';
 import type { McpManagerOptions } from '../src/mcp/manager.ts';
-import { authFilePath, hasStoredTokens, listenForCallback, openInBrowser } from '../src/mcp/oauth.ts';
+import { authFilePath, codeFromCallback, hasStoredTokens, isRemoteSession, listenForCallback, openInBrowser, parsePastedCallback } from '../src/mcp/oauth.ts';
 import { buildMcpTool, DEFER_TOOLS_AT, formatToolResult, mcpToolName } from '../src/mcp/tools.ts';
 import { PermissionEngine } from '../src/permissions/engine.ts';
 import type { PermissionMode } from '../src/permissions/engine.ts';
@@ -937,6 +937,43 @@ describe('a real server over HTTP', () => {
       assert.equal(state.status, 'connected', state.error);
       assert.equal(fixture.registered.length, 0);
       assert.equal(fixture.authorizeRequests[0]!.get('client_id'), 'my-app');
+    });
+
+    it('signs in with a pasted address, for a browser on another machine', async () => {
+      const fixture = await start({ oauth: true });
+      const notices: string[] = [];
+      let opened = 0;
+      const manager = managerFor([named('o', { type: 'http', url: `${fixture.url}/mcp` })], {
+        openUrl: () => {
+          opened++;
+        },
+        onNotice: (text) => notices.push(text),
+      });
+      const questions: string[] = [];
+      const state = await manager.login('o', undefined, async (question) => {
+        questions.push(question);
+        if (questions.length === 1) return 'not an address';
+        // The browser elsewhere: it signs in, and is sent to a localhost address it cannot load.
+        const authorize = /https?:\/\/\S+/.exec(notices.at(-1)!)![0];
+        const response = await fetch(authorize, { redirect: 'manual' });
+        return response.headers.get('location');
+      });
+      assert.equal(state.status, 'connected', state.error);
+      assert.equal(opened, 0, 'no browser is opened on this machine');
+      assert.match(notices.at(-1)!, /in a browser on any machine/);
+      assert.match(questions[0]!, /Paste that address here/);
+      assert.match(questions[1]!, /no code in it/);
+    });
+
+    it('takes a pasted address whole or only its query, and refuses one from another login', () => {
+      assert.equal(parsePastedCallback('http://localhost:1234/callback?code=abc&state=s')!.get('code'), 'abc');
+      assert.equal(parsePastedCallback('  code=abc&state=s ')!.get('code'), 'abc');
+      assert.equal(parsePastedCallback('?error=access_denied')!.get('error'), 'access_denied');
+      assert.equal(parsePastedCallback('http://localhost:1234/callback'), null);
+      assert.equal(codeFromCallback(new URLSearchParams('code=abc&state=s'), 's'), 'abc');
+      assert.throws(() => codeFromCallback(new URLSearchParams('code=abc&state=other'), 's'), /did not match/);
+      assert.equal(isRemoteSession({ SSH_CONNECTION: '1.2.3.4 22 5.6.7.8 22' }), true);
+      assert.equal(isRemoteSession({}), false);
     });
 
     it('rejects a callback that does not match the request', async () => {

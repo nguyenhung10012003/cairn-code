@@ -167,6 +167,26 @@ describe('resume through the runtime', () => {
 });
 
 describe('checkpoints', () => {
+  it('count every turn, with or without file changes, across a resume, and undo from one turn on', async () => {
+    const dir = project();
+    const file = join(dir, 'f');
+    writeFileSync(file, 'v0');
+    const id = `s-resume-${Date.now()}`;
+    const store = new CheckpointStore(id);
+    store.beginTurn();
+    await store.snapshot(file);
+    writeFileSync(file, 'v1');
+    store.beginTurn();
+    await store.snapshot(file);
+    writeFileSync(file, 'v2');
+    store.beginTurn();
+    store.beginTurn();
+    const resumed = new CheckpointStore(id);
+    assert.equal(resumed.currentTurn, 4, 'the turns that changed nothing still count');
+    await resumed.rewindFrom(2);
+    assert.equal(readFileSync(file, 'utf8'), 'v1', 'back to before turn 2');
+  });
+
   it('restores changed files and removes created ones', async () => {
     const dir = project();
     const edited = join(dir, 'edited');
@@ -449,6 +469,45 @@ describe('hook runner', () => {
     assert.equal((await runner('exit 0').run('PreToolUse', common, big)).blocked, false);
   });
 
+  it('runs a prompt hook through the model, and reads its answer as a command hook\'s exit code', async () => {
+    const asked: { system: string; prompt: string; model?: string }[] = [];
+    const answering = (reply: string) => {
+      const hook = new HookRunner(
+        {
+          PreToolUse: [{ hooks: [{ type: 'prompt', prompt: 'Block reads of .env files: $ARGUMENTS. Costs \\$1.', model: 'haiku' }] }],
+          Stop: [{ hooks: [{ type: 'prompt', prompt: 'Are all tasks done?' }] }],
+          SessionStart: [{ hooks: [{ type: 'prompt', prompt: 'never asked' }] }],
+        },
+        tmpdir(),
+      );
+      hook.evaluator = async (request) => {
+        asked.push(request);
+        return reply;
+      };
+      return hook;
+    };
+    const denied = await answering('Sure. {"ok": false, "reason": "It reads .env"}').run('PreToolUse', common, input);
+    assert.equal(denied.blocked, true);
+    assert.equal(denied.blockReason, 'It reads .env');
+    assert.match(asked[0]!.prompt, /^Block reads of \.env files: \{.*"tool_name":"Edit".*\}\. Costs \$1\.$/);
+    assert.equal(asked[0]!.model, 'haiku');
+    assert.match(asked[0]!.system, /"ok": true/);
+    assert.equal((await answering('{"ok": true}').run('PreToolUse', common, input)).blocked, false);
+    const keepGoing = await answering('{"ok": false, "reason": "Tests still fail"}').run('Stop', common);
+    assert.equal(keepGoing.blocked, true, 'on Stop, no means keep working');
+    assert.match(asked.at(-1)!.prompt, /^Are all tasks done\?\n\n\{/, 'the input is appended without $ARGUMENTS');
+    assert.equal((await answering('{"ok": false, "reason": "x", "impossible": true}').run('Stop', common)).blocked, false, 'it may stop when it never can be done');
+    const garbled = await answering('no idea').run('PreToolUse', common, input);
+    assert.equal(garbled.blocked, false);
+    assert.match(garbled.notices[0]!, /did not answer with JSON/);
+    const count = asked.length;
+    await answering('{"ok": false}').run('SessionStart', common);
+    assert.equal(asked.length, count, 'prompt hooks do not run on events where an answer means nothing');
+    assert.deepEqual(HookRunner.misplacedPrompts({ SessionStart: [{ hooks: [{ type: 'prompt', prompt: 'x' }] }] }), ['SessionStart']);
+    const unwired = await new HookRunner({ Stop: [{ hooks: [{ type: 'prompt', prompt: 'x' }] }] }, tmpdir()).run('Stop', common);
+    assert.equal(unwired.blocked, false);
+    assert.match(unwired.notices[0]!, /no model is available/);
+  });
   it('exposes the project directory, and does nothing with no hooks configured', async () => {
     const result = await new HookRunner({ SessionStart: [{ hooks: [{ type: 'command', command: 'echo $KARST_PROJECT_DIR' }] }] }, '/some/dir').run('SessionStart', common);
     assert.deepEqual(result.additionalContext, ['/some/dir']);
@@ -461,6 +520,21 @@ describe('slash commands', () => {
     return createRuntime({ cwd: dir, prompter, provider: new ScriptedProvider(turns) });
   }
 
+  it('/review and /security-review ask the model to review the change the arguments name', async () => {
+    const runtime = await runtimeWith();
+    const prompt = async (line: string): Promise<string> => (await runSlashCommand(line, runtime, noChoice)).prompt!;
+    assert.match(await prompt('/review'), /git diff HEAD/);
+    assert.match(await prompt('/review main'), /git diff main\.\.\.HEAD/);
+    assert.match(await prompt('/review 42'), /gh pr diff 42/);
+    assert.match(await prompt('/review https://github.com/o/r/pull/7'), /gh pr diff https:\/\/github\.com\/o\/r\/pull\/7/);
+    const odd = await prompt('/review main; rm -rf ~');
+    assert.doesNotMatch(odd, /git diff main;/, 'text that is not a ref never goes into a command line');
+    assert.match(odd, /Review what this describes: main; rm -rf ~/);
+    assert.match(await prompt('/review'), /Do not change any file/);
+    const security = await prompt('/security-review main');
+    assert.match(security, /security review/);
+    assert.match(security, /git diff main\.\.\.HEAD/);
+  });
   it('reports status, cost and permissions', async () => {
     const runtime = await runtimeWith();
     assert.match((await runSlashCommand('/status', runtime, noChoice)).output!, /Provider: scripted/);
@@ -507,10 +581,71 @@ describe('slash commands', () => {
     });
     for await (const _ of runtime.agent.run('edit', new AbortController().signal)) { /* drain */ }
     assert.equal(readFileSync(file, 'utf8'), 'changed');
-    assert.match((await runSlashCommand('/rewind', runtime, noChoice)).output!, /restored/);
+    assert.match((await runSlashCommand('/rewind 1', runtime, noChoice)).output!, /restored/);
     assert.equal(readFileSync(file, 'utf8'), 'original');
-    assert.match((await runSlashCommand('/rewind', runtime, noChoice)).output!, /No file changes/);
+    assert.match((await runSlashCommand('/rewind 1', runtime, noChoice)).output!, /No file changes/);
     assert.match((await runSlashCommand('/rewind x', runtime, noChoice)).output!, /Usage/);
+  });
+
+  it('/rewind goes back to before a chosen message: files, conversation, or both', async () => {
+    const dir = project();
+    const file = join(dir, 'f');
+    writeFileSync(file, 'original');
+    const turns = [
+      { toolCalls: [{ name: 'Read', input: { file_path: file } }] },
+      { toolCalls: [{ name: 'Edit', input: { file_path: file, old_string: 'original', new_string: 'one' } }] },
+      { text: 'first done' },
+      { toolCalls: [{ name: 'Edit', input: { file_path: file, old_string: 'one', new_string: 'two' } }] },
+      { text: 'second done' },
+      { text: 'third done' },
+    ];
+    const runtime = await createRuntime({ cwd: dir, prompter, mode: 'bypassPermissions', provider: new ScriptedProvider(turns) });
+    for (const prompt of ['first prompt', 'second prompt', 'just talk']) {
+      for await (const _ of runtime.agent.run(prompt, new AbortController().signal)) { /* drain */ }
+    }
+    assert.equal(readFileSync(file, 'utf8'), 'two');
+    const titles: string[][] = [];
+    const choosing = (...answers: number[]) => ({
+      choose: async (_title: string, options: string[]) => {
+        titles.push(options);
+        return answers.shift() ?? null;
+      },
+    });
+
+    // Newest first: the third message, then the second, then the first.
+    const sessionBefore = runtime.agent.sessionId;
+    const filesOnly = await runSlashCommand('/rewind', runtime, choosing(1, 2));
+    assert.deepEqual(titles[0], ['just talk', 'second prompt', 'first prompt']);
+    assert.deepEqual(titles[1], ['Files and conversation', 'Conversation only', 'Files only', 'Cancel']);
+    assert.match(filesOnly.output!, /restored/);
+    assert.equal(readFileSync(file, 'utf8'), 'one', 'back to before the second message');
+    assert.equal(runtime.agent.sessionId, sessionBefore, 'the conversation is the same');
+
+    const both = await runSlashCommand('/rewind', runtime, choosing(2, 0));
+    assert.equal(readFileSync(file, 'utf8'), 'original');
+    assert.equal(runtime.agent.messages.length, 0, 'the conversation is back before the first message');
+    assert.notEqual(runtime.agent.sessionId, sessionBefore);
+    assert.match(both.output!, new RegExp(`kept as session ${sessionBefore}`));
+    assert.equal(both.input, 'first prompt', 'the message goes back on the line, to edit and send again');
+    assert.equal(restoreHistory(dir, sessionBefore)!.messages.length, 12, 'the old transcript keeps everything');
+    assert.deepEqual(await runSlashCommand('/rewind', runtime, noChoice), { output: 'Nothing to go back to yet.' });
+  });
+
+  it('/rewind offers only the conversation when no file changed since', async () => {
+    const runtime = await runtimeWith([{ text: 'a' }, { text: 'b' }]);
+    for (const prompt of ['one', 'two']) {
+      for await (const _ of runtime.agent.run(prompt, new AbortController().signal)) { /* drain */ }
+    }
+    const options: string[][] = [];
+    const result = await runSlashCommand('/rewind', runtime, {
+      choose: async (_title, given) => {
+        options.push(given);
+        return 0;
+      },
+    });
+    assert.deepEqual(options[1], ['Conversation only', 'Cancel']);
+    assert.equal(runtime.agent.messages.length, 2, 'the first exchange stays');
+    assert.equal(result.input, 'two');
   });
 
   it('/resume switches session through the picker', async () => {
@@ -541,8 +676,12 @@ describe('slash commands', () => {
     const dir = project();
     mkdirSync(join(dir, '.karst/commands'), { recursive: true });
     writeFileSync(join(dir, '.karst/commands/review.md'), 'Review it.');
+    writeFileSync(join(dir, '.karst/commands/deploy.md'), 'Deploy it.');
     const runtime = await runtimeWith([], dir);
-    assert.match((await runSlashCommand('/review', runtime, noChoice)).output!, /Unknown command/);
+    assert.match((await runSlashCommand('/deploy', runtime, noChoice)).output!, /Unknown command/);
+    const review = (await runSlashCommand('/review', runtime, noChoice)).prompt!;
+    assert.doesNotMatch(review, /Review it\./, "the project's /review is not used");
+    assert.match(review, /git diff HEAD/, 'the one that comes with Karst runs instead');
   });
 
   it('/trust records the directory', async () => {

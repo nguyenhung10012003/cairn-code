@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { describe, it } from 'bun:test';
 import { bashTool } from '../src/tools/bash.ts';
 import { TaskRegistry } from '../src/tools/tasks.ts';
 import { editTool, readTool, writeTool } from '../src/tools/files.ts';
 import { askUserTool, exitPlanModeTool, todoWriteTool } from '../src/tools/interaction.ts';
-import { globTool, grepTool } from '../src/tools/search.ts';
+import { globTool, grepTool, LineMatcher } from '../src/tools/search.ts';
 import { FileTracker, validateInput } from '../src/tools/types.ts';
 import type { Prompter, ToolContext } from '../src/tools/types.ts';
 import { htmlToText, isPrivateAddress, webFetchTool } from '../src/tools/web.ts';
@@ -313,6 +313,58 @@ describe('Glob and Grep', () => {
   it('Grep can search one file', async () => {
     const { dir, ctx } = project();
     assert.equal((await grepTool.execute({ pattern: 'needle', path: join(dir, 'src/c.md') }, ctx)).content, join(dir, 'src/c.md'));
+  });
+  it('Grep applies .gitignore files as git does: nested ones, ! lines, and those above it in the repository', async () => {
+    const { dir, ctx } = setup();
+    mkdirSync(join(dir, '.git'));
+    const write = (path: string, text = 'needle\n'): void => {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), text);
+    };
+    write('.gitignore', '*.log\n!keep.log\n/top-only.txt\nout/*\n!out/kept.txt\ncache/\n# a comment\n');
+    write('sub/.gitignore', 'local.txt\n!app.log\n');
+    for (const path of ['app.log', 'keep.log', 'top-only.txt', 'out/out.txt', 'out/kept.txt', 'cache/x.txt']) write(path);
+    for (const path of ['sub/top-only.txt', 'sub/cache', 'sub/local.txt', 'sub/app.log', 'sub/debug.log', 'other/local.txt']) write(path);
+    const found = async (path?: string): Promise<string[]> =>
+      (await grepTool.execute({ pattern: 'needle', ...(path ? { path: join(dir, path) } : {}) }, ctx)).content
+        .split('\n')
+        .map((line) => relative(dir, line))
+        .sort();
+    assert.deepEqual(await found(), ['keep.log', 'other/local.txt', 'out/kept.txt', 'sub/app.log', 'sub/cache', 'sub/top-only.txt']);
+    assert.deepEqual(await found('sub'), ['sub/app.log', 'sub/cache', 'sub/top-only.txt'], 'the rules of the repository root apply in a subdirectory');
+  });
+  it('Grep applies a .gitignore above the search directory only inside the same repository', async () => {
+    const { dir, ctx } = setup();
+    mkdirSync(join(dir, 'inner'));
+    writeFileSync(join(dir, '.gitignore'), '*.txt\n');
+    writeFileSync(join(dir, 'inner/a.txt'), 'needle\n');
+    const search = async (): Promise<string> => (await grepTool.execute({ pattern: 'needle', path: join(dir, 'inner') }, ctx)).content;
+    assert.equal(await search(), join(dir, 'inner/a.txt'), 'not a repository: only the .gitignore files under the search directory count');
+    mkdirSync(join(dir, '.git'));
+    assert.match(await search(), /No matches/);
+  });
+  it('Grep gives up on a pattern that backtracks for ever, without freezing the session', async () => {
+    const matcher = new LineMatcher('^(a|aa)+$', '', 300);
+    let ticks = 0;
+    const ticker = setInterval(() => ticks++, 20);
+    const started = Date.now();
+    const outcome = await matcher.match(`${'a'.repeat(60)}b\n`.repeat(50), false, new AbortController().signal);
+    clearInterval(ticker);
+    assert.equal(outcome.kind, 'slow');
+    assert.ok(Date.now() - started < 2_000, 'it stops at its time limit');
+    assert.ok(ticks >= 5, 'the main thread went on running meanwhile');
+    assert.equal((await matcher.match('aa', false, new AbortController().signal)).kind, 'failed', 'a matcher that gave up takes no more files');
+  });
+  it('Grep stops at once on Esc, even in the middle of a slow pattern', async () => {
+    const { dir, ctx } = setup();
+    writeFileSync(join(dir, 'slow.txt'), `${'a'.repeat(60)}b\n`.repeat(50));
+    const controller = new AbortController();
+    ctx.signal = controller.signal;
+    setTimeout(() => controller.abort(), 200);
+    const started = Date.now();
+    const result = await grepTool.execute({ pattern: '^(a|aa)+$' }, ctx);
+    assert.ok(Date.now() - started < 1_500, `took ${Date.now() - started} ms`);
+    assert.match(result.content, /No matches/);
   });
 });
 

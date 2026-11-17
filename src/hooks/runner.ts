@@ -4,6 +4,7 @@
  * unless `onFailure` says to block. An http hook gets the same JSON as a POST body.
  */
 import { spawn } from 'node:child_process';
+import { basename } from 'node:path';
 import type { HookGroup, HookHandler, HooksConfig } from '../config/settings.ts';
 import { debug } from '../core/debug.ts';
 import { matchBashPattern, parseRule } from '../permissions/rules.ts';
@@ -24,20 +25,34 @@ export type HookEvent =
   | 'PostCompact'
   | 'InstructionsLoaded'
   | 'CwdChanged'
+  | 'FileChanged'
   | 'StopFailure'
   | 'Stop';
 
 export const HOOK_EVENTS: readonly HookEvent[] = [
   'SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch',
   'PermissionRequest', 'Notification', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'InstructionsLoaded',
-  'CwdChanged', 'StopFailure', 'Stop',
+  'CwdChanged', 'FileChanged', 'StopFailure', 'Stop',
 ];
 
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const MAX_CONTEXT_CHARS = 10_000;
 const MAX_CAPTURED_CHARS = 1_000_000;
 const CONTEXT_EVENTS: ReadonlySet<HookEvent> = new Set(['SessionStart', 'UserPromptSubmit']);
-const SUPPORTED_TYPES = new Set(['command', 'http']);
+const SUPPORTED_TYPES = new Set(['command', 'http', 'prompt']);
+const DEFAULT_PROMPT_TIMEOUT_SECONDS = 30;
+/** Where a model's yes or no means something. Elsewhere a prompt hook is skipped. */
+const PROMPT_EVENTS: ReadonlySet<string> = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'UserPromptSubmit', 'Stop', 'SubagentStop']);
+
+/** Sends one prompt to a model and returns its text. Set by the runtime once it has a provider. */
+export type HookEvaluator = (request: { system: string; prompt: string; model?: string; signal: AbortSignal }) => Promise<string>;
+
+const PROMPT_HOOK_SYSTEM = `You check one condition for a hook in a coding agent. You receive the hook's instructions and the event's input as JSON. Decide only from what you are given.
+
+Answer with one JSON object and nothing else:
+- {"ok": true} when the action may go ahead, or the condition holds;
+- {"ok": false, "reason": "..."} when it may not, with a reason the agent can act on;
+- add "impossible": true to an "ok": false answer when the condition can never be met, so the agent should stop trying.`;
 
 export interface HookResult {
   /** Stops the action. On Stop, tells the agent to keep going instead. */
@@ -51,6 +66,8 @@ export interface HookResult {
   requestDecision?: { behavior: 'allow' | 'deny'; updatedInput?: Record<string, unknown>; message?: string };
   additionalContext: string[];
   notices: string[];
+  /** From SessionStart, CwdChanged or FileChanged: the files FileChanged watches, besides those its matchers name. */
+  watchPaths?: string[];
 }
 
 /** Reported as each hook runs, for --include-hook-events. */
@@ -70,6 +87,11 @@ export interface HookCommonInput {
 
 function emptyResult(): HookResult {
   return { blocked: false, additionalContext: [], notices: [] };
+}
+
+/** A FileChanged matcher is a list of file names, compared whole, as it also says which files to watch. */
+function fileNames(matcher: string | undefined): string[] {
+  return (matcher ?? '').split('|').map((name) => name.trim()).filter((name) => name !== '' && name !== '*');
 }
 
 function matcherMatches(matcher: string | undefined, target: string): boolean {
@@ -175,7 +197,55 @@ async function runHttp(handler: HookHandler, payload: string, signal?: AbortSign
   }
 }
 
+/** The hook's prompt with its input in place of `$ARGUMENTS`, or after it. `\$` stays a plain `$`. */
+export function fillPrompt(prompt: string, payload: string): string {
+  let used = false;
+  const filled = prompt.replace(/\\\$|\$ARGUMENTS/g, (match) => {
+    if (match !== '$ARGUMENTS') return '$';
+    used = true;
+    return payload;
+  });
+  return used ? filled : `${filled}\n\n${payload}`;
+}
+
+/**
+ * Asks a model, and answers as a command hook would: `ok: false` is exit code 2 with the reason,
+ * so it blocks the action, or on Stop keeps the agent going. On Stop and SubagentStop,
+ * `impossible: true` lets it stop after all, as there is nothing left to try.
+ */
+async function runPrompt(handler: HookHandler, event: HookEvent, payload: string, evaluator: HookEvaluator | undefined, signal?: AbortSignal): Promise<CommandOutcome> {
+  if (!evaluator) return { code: 1, stdout: '', stderr: 'no model is available to run it', timedOut: false };
+  if (typeof handler.prompt !== 'string' || handler.prompt.trim() === '') return { code: 1, stdout: '', stderr: 'it has no prompt', timedOut: false };
+  const timeout = AbortSignal.timeout((handler.timeout ?? DEFAULT_PROMPT_TIMEOUT_SECONDS) * 1000);
+  let reply: string;
+  try {
+    reply = await evaluator({
+      system: PROMPT_HOOK_SYSTEM,
+      prompt: fillPrompt(handler.prompt, payload),
+      ...(handler.model ? { model: handler.model } : {}),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    });
+  } catch (error) {
+    return { code: 1, stdout: '', stderr: (error as Error).message, timedOut: timeout.aborted };
+  }
+  let answer: { ok?: unknown; reason?: unknown; impossible?: unknown };
+  try {
+    answer = JSON.parse(/\{[\s\S]*\}/.exec(reply)?.[0] ?? '') as typeof answer;
+  } catch {
+    return { code: 1, stdout: '', stderr: 'the model did not answer with JSON', timedOut: false };
+  }
+  if (answer.ok === true) return { code: 0, stdout: '', stderr: '', timedOut: false };
+  if (answer.ok !== false) return { code: 1, stdout: '', stderr: 'the model answered without "ok"', timedOut: false };
+  if (answer.impossible === true && (event === 'Stop' || event === 'SubagentStop')) return { code: 0, stdout: '', stderr: '', timedOut: false };
+  const reason = typeof answer.reason === 'string' && answer.reason.trim() ? answer.reason.trim() : 'A prompt hook said no.';
+  return { code: 2, stdout: '', stderr: reason, timedOut: false };
+}
+
 function describeHandler(handler: HookHandler): string {
+  if (handler.type === 'prompt') {
+    const text = (handler.prompt ?? '').replace(/\s+/g, ' ').trim();
+    return `prompt: ${text.length > 60 ? `${text.slice(0, 59)}…` : text}`;
+  }
   return handler.type === 'http' ? handler.url! : [handler.command, ...(handler.args ?? [])].join(' ');
 }
 
@@ -192,11 +262,19 @@ interface HookJson {
     updatedToolOutput?: string;
     additionalContext?: string;
     decision?: { behavior?: string; updatedInput?: Record<string, unknown>; message?: string };
+    watchPaths?: unknown;
   };
+  watchPaths?: unknown;
+}
+
+function pathList(value: unknown): string[] | undefined {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.startsWith('/')) : undefined;
 }
 
 function applyJson(json: HookJson, result: HookResult): void {
   if (json.systemMessage) result.notices.push(json.systemMessage);
+  const watchPaths = pathList(json.hookSpecificOutput?.watchPaths) ?? pathList(json.watchPaths);
+  if (watchPaths) result.watchPaths = watchPaths;
   if (json.decision === 'block' || json.continue === false) {
     result.blocked = true;
     result.blockReason = json.reason ?? json.stopReason ?? 'Blocked by a hook.';
@@ -233,6 +311,8 @@ export class HookRunner {
   /** Hooks added while running, by a skill. A `once` hook is dropped after its first success. */
   private readonly added: HooksConfig = {};
   onActivity?: (activity: HookActivity) => void;
+  /** Runs `prompt` hooks. Without it, they fail as hooks that could not start. */
+  evaluator?: HookEvaluator;
 
   constructor(config: HooksConfig, projectDir: string) {
     this.config = config;
@@ -265,13 +345,31 @@ export class HookRunner {
     );
   }
 
+  /** Whether any hook is set for `event`. */
+  has(event: HookEvent): boolean {
+    return (this.groups()[event] ?? []).some((group) => (group.hooks ?? []).length > 0);
+  }
+
+  /** The file names FileChanged matchers list, which are watched in the working directory. */
+  watchedNames(): string[] {
+    return [...new Set((this.groups().FileChanged ?? []).flatMap((group) => fileNames(group.matcher)))];
+  }
+
+  /** The events a config gives `prompt` hooks that never run there. */
+  static misplacedPrompts(config: HooksConfig): string[] {
+    return Object.entries(config)
+      .filter(([event, groups]) => !PROMPT_EVENTS.has(event) && groups.some((group) => (group.hooks ?? []).some((handler) => handler.type === 'prompt')))
+      .map(([event]) => event);
+  }
+
   private forget(handler: HookHandler): void {
     for (const groups of Object.values(this.added)) {
       for (const group of groups) group.hooks = group.hooks.filter((candidate) => candidate !== handler);
     }
   }
 
-  private execute(handler: HookHandler, payload: string, cwd: string, env: Record<string, string>, signal?: AbortSignal): Promise<CommandOutcome> {
+  private execute(handler: HookHandler, event: HookEvent, payload: string, cwd: string, env: Record<string, string>, signal?: AbortSignal): Promise<CommandOutcome> {
+    if (handler.type === 'prompt') return runPrompt(handler, event, payload, this.evaluator, signal);
     return handler.type === 'http' ? runHttp(handler, payload, signal) : runCommand(handler, payload, cwd, env, signal);
   }
 
@@ -285,24 +383,26 @@ export class HookRunner {
     const toolName = extra.tool_name as string | undefined;
     const input = extra.tool_input as Record<string, unknown> | undefined;
     const target = toolName ?? ['source', 'trigger', 'notification_type', 'agent_type', 'load_reason'].map((key) => extra[key] as string | undefined).find(Boolean) ?? '';
+    const changed = event === 'FileChanged' ? basename(String(extra.file_path ?? '')) : undefined;
     const handlers = (this.groups()[event] ?? [])
-      .filter((group) => matcherMatches(group.matcher, target))
+      .filter((group) => (changed === undefined ? matcherMatches(group.matcher, target) : fileNames(group.matcher).length === 0 || fileNames(group.matcher).includes(changed)))
       .flatMap((group) => group.hooks ?? [])
-      .filter((handler) => SUPPORTED_TYPES.has(handler.type) && ifConditionMatches(handler.if, toolName ?? '', input));
+      .filter((handler) => SUPPORTED_TYPES.has(handler.type) && (handler.type !== 'prompt' || PROMPT_EVENTS.has(event)) && ifConditionMatches(handler.if, toolName ?? '', input));
     if (handlers.length === 0) return result;
 
     const payload = JSON.stringify({ ...common, hook_event_name: event, ...extra });
     const env = { KARST_PROJECT_DIR: this.projectDir };
     const waited = handlers.filter((handler) => {
-      if (!handler.async) return true;
+      // A prompt hook is only there for its answer, so it is always waited for.
+      if (!handler.async || handler.type === 'prompt') return true;
       // Nothing can be decided from an async hook, so its answer is not awaited or read.
-      void this.execute(handler, payload, common.cwd, env);
+      void this.execute(handler, event, payload, common.cwd, env);
       return false;
     });
     const outcomes = await Promise.all(
       waited.map(async (handler) => {
         const started = Date.now();
-        const outcome = await this.execute(handler, payload, common.cwd, env, signal);
+        const outcome = await this.execute(handler, event, payload, common.cwd, env, signal);
         debug('hooks', `${event}: ${describeHandler(handler)} -> ${outcome.timedOut ? 'timed out' : `exit ${outcome.code}`}`);
         this.onActivity?.({ event, handler: describeHandler(handler), exitCode: outcome.code, durationMs: Date.now() - started });
         return outcome;

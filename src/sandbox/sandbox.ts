@@ -35,6 +35,8 @@ export interface SandboxSettings {
     deniedDomains?: string[];
     /** Let commands listen on and connect to local ports. */
     allowLocalBinding?: boolean;
+    /** false: refuse a domain neither list names, rather than asking the user about it. */
+    askForUnknownDomains?: boolean;
   };
 }
 
@@ -229,6 +231,8 @@ export interface SandboxOptions {
   cwd: string;
   workingDirs: () => string[];
   platform?: NodeJS.Platform;
+  /** Asks the user whether a sandboxed command may reach a domain the settings do not name. */
+  askNetwork?: (host: string, port: number) => Promise<boolean>;
 }
 
 export async function createSandbox(settings: SandboxSettings, options: SandboxOptions): Promise<CreatedSandbox> {
@@ -246,9 +250,12 @@ export async function createSandbox(settings: SandboxSettings, options: SandboxO
   const deniedDomains = settings.network?.deniedDomains ?? [];
   // bubblewrap gives the command its own network namespace, where the host's proxy is unreachable.
   let proxy: RunningProxy | null = null;
-  if (allowedDomains.length > 0) {
-    if (platform === 'linux') warnings.push('sandbox.network.allowedDomains is not supported on Linux yet, so sandboxed commands have no network.');
-    else proxy = await startProxy({ allowedDomains, deniedDomains });
+  // With someone to ask, the proxy runs even with no domains allowed, so a command can ask for one.
+  const ask = settings.network?.askForUnknownDomains === false ? undefined : options.askNetwork;
+  if (allowedDomains.length > 0 || ask) {
+    if (platform === 'linux') {
+      if (allowedDomains.length > 0) warnings.push('sandbox.network.allowedDomains is not supported on Linux yet, so sandboxed commands have no network.');
+    } else proxy = await startProxy({ allowedDomains, deniedDomains, ...(ask ? { ask } : {}) });
   }
 
   const excluded = settings.excludedCommands ?? [];
@@ -291,7 +298,7 @@ export async function createSandbox(settings: SandboxSettings, options: SandboxO
         `Commands may leave the sandbox with approval: ${unsandboxedAllowed ? 'yes' : 'no'}`,
         `Writable: ${current.writable.join(', ')}`,
         ...(current.denyRead.length > 0 ? [`Unreadable: ${current.denyRead.join(', ')}`] : []),
-        `Network: ${proxy ? `through a proxy, to ${allowedDomains.join(', ')}` : 'none'}`,
+        `Network: ${proxy ? `through a proxy, to ${[...allowedDomains, ...(ask ? ['others when you approve them'] : [])].join(', ')}` : 'none'}`,
         ...(excluded.length > 0 ? [`Excluded commands: ${excluded.join(', ')}`] : []),
       ];
     },

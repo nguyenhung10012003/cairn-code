@@ -15,6 +15,9 @@ import type { Tool, ToolContext, ToolOutput } from '../tools/types.ts';
 import type { SessionStore } from '../session/store.ts';
 import type { SkillActivation } from '../skills/skills.ts';
 
+/** How a message a stop hook adds begins. It does not start a turn, so /rewind does not offer it. */
+export const STOP_HOOK_CONTINUE = 'A stop hook asked you to continue:';
+
 /** Room for thinking as well as the reply, since thinking counts toward this limit. */
 const DEFAULT_MAX_OUTPUT_TOKENS = 64_000;
 const AUTO_COMPACT_FRACTION = 0.8;
@@ -532,7 +535,7 @@ export class Agent {
         stopHookContinuations++;
         this.append({
           role: 'user',
-          content: [{ type: 'text', text: `A stop hook asked you to continue: ${stop.blockReason ?? 'keep working.'}` }],
+          content: [{ type: 'text', text: `${STOP_HOOK_CONTINUE} ${stop.blockReason ?? 'keep working.'}` }],
         });
         continue;
       }
@@ -652,7 +655,8 @@ export class Agent {
     }
 
     const verdict = hook.permission === 'allow' || hook.permission === 'ask' ? hook.permission : undefined;
-    const decision = this.options.engine.check(use.name, tool.access(input, ctx), verdict);
+    const access = tool.access(input, ctx);
+    const decision = this.options.engine.check(use.name, access, verdict);
     if (decision.behavior === 'deny') return { rejection: `Permission denied: ${decision.reason}`, notices };
     if (decision.behavior === 'ask') {
       const request = await this.options.hooks.run(
@@ -675,6 +679,7 @@ export class Agent {
       const answer = await ctx.prompter.permission({
         toolName: use.name,
         input,
+        ...(access.kind === 'read' || access.kind === 'edit' ? { paths: access.paths } : {}),
         reason: decision.reason,
         suggestions: decision.suggestions ?? [],
         forced: decision.forced ?? false,

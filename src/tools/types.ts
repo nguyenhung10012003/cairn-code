@@ -24,6 +24,8 @@ export interface ToolOutput {
 export interface PermissionPrompt {
   toolName: string;
   input: Record<string, unknown>;
+  /** The files the call reads or changes, resolved against the working directory. */
+  paths?: string[];
   reason: string;
   suggestions: RuleSuggestion[];
   forced: boolean;

@@ -147,6 +147,42 @@ export interface CallbackListener {
 const CALLBACK_PAGE = `<!doctype html><meta charset="utf-8"><title>${APP_DISPLAY_NAME}</title><p>Signed in. You can close this window and return to the terminal.</p>`;
 const CALLBACK_ERROR_PAGE = `<!doctype html><meta charset="utf-8"><title>${APP_DISPLAY_NAME}</title><p>Sign-in did not complete. Return to the terminal for details.</p>`;
 
+/** Over SSH, a browser opened here is not the user's, and theirs cannot reach this machine's localhost. */
+export function isRemoteSession(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY);
+}
+
+/**
+ * The code in a callback's query, after checking that it answers this login. Throws with what the
+ * server said when it refused, or when the state is not the one this login sent.
+ */
+export function codeFromCallback(query: URLSearchParams, expectedState: string): string {
+  const error = query.get('error');
+  if (error) throw new Error(`The server refused sign-in: ${error}${query.get('error_description') ? ` (${query.get('error_description')})` : ''}`);
+  // Another site or process could be trying to complete a login it started itself.
+  if (query.get('state') !== expectedState) throw new Error('Sign-in failed: the response did not match this request.');
+  const code = query.get('code');
+  if (!code) throw new Error('Sign-in failed: the address has no code in it.');
+  return code;
+}
+
+/**
+ * The query of the address the browser was sent back to, pasted by the user when that address
+ * could not load, as when the browser is on another machine. Takes the whole address or only its
+ * query. Null when it has neither a code nor an error.
+ */
+export function parsePastedCallback(pasted: string): URLSearchParams | null {
+  const text = pasted.trim();
+  if (!text) return null;
+  let query: URLSearchParams;
+  try {
+    query = new URL(text).searchParams;
+  } catch {
+    query = new URLSearchParams(text.replace(/^[^?]*\?/, ''));
+  }
+  return query.has('code') || query.has('error') ? query : null;
+}
+
 /** Listens only on the loopback address, for the moment of a login. */
 export async function listenForCallback(port = 0): Promise<CallbackListener> {
   let settle: { resolve: (query: URLSearchParams) => void } | undefined;
@@ -187,14 +223,10 @@ export async function listenForCallback(port = 0): Promise<CallbackListener> {
         const handle = (query: URLSearchParams): void => {
           clearTimeout(timer);
           signal?.removeEventListener('abort', onAbort);
-          const error = query.get('error');
-          if (error) {
-            reject(new Error(`The server refused sign-in: ${error}${query.get('error_description') ? ` (${query.get('error_description')})` : ''}`));
-          } else if (query.get('state') !== expectedState) {
-            // Another site or process could be trying to complete a login it started itself.
-            reject(new Error('Sign-in failed: the response did not match this request.'));
-          } else {
-            resolve(query.get('code') ?? '');
+          try {
+            resolve(codeFromCallback(query, expectedState));
+          } catch (error) {
+            reject(error as Error);
           }
         };
         const queued = pendingQueries.shift();

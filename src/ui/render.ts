@@ -245,6 +245,8 @@ export function permissionPreview(name: string, input: Record<string, unknown>):
       return [style.bold(`  ${sanitize(String(input.file_path ?? ''))}`)];
     case 'WebFetch':
       return [style.info(`  ${sanitize(String(input.url ?? ''))}`)];
+    case 'Network':
+      return [style.info(`  ${sanitize(String(input.host ?? ''))}:${sanitize(String(input.port ?? ''))}`)];
     default:
       return clip(JSON.stringify(input, null, 2), '');
   }
